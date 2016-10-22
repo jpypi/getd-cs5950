@@ -17,6 +17,9 @@
 #include "message.h"
 #include "acl.h"
 
+// This is used so that functions can be ordered in a more logical way
+#include "getd.h"
+
 
 #define initmsgtype(N) {.header.messageType = N,\
                         .header.messageLength = sizeof(MessageType ## N)}
@@ -24,6 +27,7 @@
                         .header.messageLength = sizeof(MessageType ## N),\
                         .sidLength=SID_LENGTH}
 #define sendtype(N, sock, obj) nn_send(sock, obj, sizeof(MessageType ## N), 0)
+
 
 HashMap *sessions;
 
@@ -51,19 +55,13 @@ int is_full_path(char *path)
 }
 
 
-/* TYPE 2
- * Send a NULL terminated length-limited error message to the client.
- *
- * Returns: Results of nn_send
+/* TYPE 0
+ * A user is requesting to start a session
  */
-int send_error(int sock, char *error_text)
+void handle0(int sock, MessageType0 *buffer)
 {
-    MessageType2 err_msg = initmsgtype(2);
-    err_msg.msgLength = strnlen(error_text, MAX_ERROR_MESSAGE);
-    strncpy(err_msg.errorMessage, error_text, MAX_ERROR_MESSAGE);
-    err_msg.errorMessage[MAX_ERROR_MESSAGE] = 0;
-
-    return sendtype(2, sock, &err_msg);
+    printf("Requesting User: %s\n", buffer->distinguishedName);
+    establish_session(sock, buffer->distinguishedName);
 }
 
 
@@ -94,6 +92,39 @@ void establish_session(int sock, char const *username)
 }
 
 
+/* TYPE 2
+ * Send a NULL terminated length-limited error message to the client.
+ *
+ * Returns: Results of nn_send
+ */
+int send_error(int sock, char *error_text)
+{
+    MessageType2 err_msg = initmsgtype(2);
+    err_msg.msgLength = strnlen(error_text, MAX_ERROR_MESSAGE);
+    strncpy(err_msg.errorMessage, error_text, MAX_ERROR_MESSAGE);
+    err_msg.errorMessage[MAX_ERROR_MESSAGE] = 0;
+
+    return sendtype(2, sock, &err_msg);
+}
+
+
+/*
+ * A user is requesting a file
+ */
+void handle3(int sock, MessageType3 *buffer)
+{
+    printf("Handling 3\n");
+    if (buffer->sidLength != SID_LENGTH || buffer->sessionId[SID_LENGTH] != 0) {
+        send_error(sock, "Invalid session id.");
+        return;
+    } else {
+        printf("Session id: %s\n", buffer->sessionId);
+        printf("Path: %s\n", buffer->pathName);
+        file_transfer(sock, buffer->sessionId, buffer->pathName);
+    }
+}
+
+
 /* TYPE 5
  * End the session with the client
  */
@@ -102,16 +133,6 @@ void end_session(int sock, char const *session_id)
     MessageType5 response = initsidtype(5);
     safe_sid_copy(response.sessionId, session_id);
     sendtype(5, sock, &response);
-}
-
-
-/*
- * A user is requesting to start a session
- */
-void handle0(int sock, MessageType0 *buffer)
-{
-    printf("Requesting User: %s\n", buffer->distinguishedName);
-    establish_session(sock, buffer->distinguishedName);
 }
 
 
@@ -163,23 +184,6 @@ void file_transfer(int sock, char *session_id, char *path)
 
     end_session(sock, session_id);
     expect_ack(sock, session_id);
-}
-
-
-/*
- * A user is requesting a file
- */
-void handle3(int sock, MessageType3 *buffer)
-{
-    printf("Handling 3\n");
-    if (buffer->sidLength != SID_LENGTH || buffer->sessionId[SID_LENGTH] != 0) {
-        send_error(sock, "Invalid session id.");
-        return;
-    } else {
-        printf("Session id: %s\n", buffer->sessionId);
-        printf("Path: %s\n", buffer->pathName);
-        file_transfer(sock, buffer->sessionId, buffer->pathName);
-    }
 }
 
 
