@@ -84,7 +84,8 @@ void establish_session(int sock, char const *username)
     // TODO: Double check this is safe. Probably use strnlen.
     unsigned int un_len = strlen(username);
     char *un = malloc(un_len+1);
-    strncpy(un, username, un_len+1);
+    strncpy(un, username, un_len);
+    un[un_len] = 0;
 
     putElement(sessions, random_id, un);
 
