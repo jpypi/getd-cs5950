@@ -51,7 +51,6 @@ int is_full_path(char *path)
 }
 
 
-
 /* TYPE 2
  * Send a NULL terminated length-limited error message to the client.
  *
@@ -222,15 +221,18 @@ void server_loop(int sock)
 
 int main(int argc, char *argv[])
 {
-    printf("Value: %d\n", PATH_MAX);
-    /* Seed the prng */
+    printf("PATH_MAX: %d\n", PATH_MAX);
+
+    // Seed the prng
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     srandom((unsigned int)ts.tv_nsec);
 
+    // Initialize sessions hashmap
     sessions = initHashMap(20, NULL);
-    int sock = nn_socket(AF_SP, NN_PAIR);
 
+    // Create a nn_socket
+    int sock = nn_socket(AF_SP, NN_PAIR);
     if (sock < 0)
         err_quit("Couldn't build a socket");
 
@@ -239,6 +241,7 @@ int main(int argc, char *argv[])
 
     server_loop(sock);
 
+    // Clean up after ourselves
     nn_shutdown(sock, 0);
 
     freeHashMap(sessions, free);
