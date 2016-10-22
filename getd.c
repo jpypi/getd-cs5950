@@ -32,7 +32,8 @@ HashMap *sessions;
  * A safe copy for session ids. Always only use nlength and set a null byte at
  * the end of the dest.
  */
-void safe_sid_copy(char *dest, char const *src) {
+void safe_sid_copy(char *dest, char const *src)
+{
     strncpy(dest, src, SID_LENGTH);
     dest[SID_LENGTH] = 0;
 }
