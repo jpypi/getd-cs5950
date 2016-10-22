@@ -11,6 +11,8 @@ appropriate.
 # Standards
 - Try to use git commit message standards found here
   http://chris.beams.io/posts/git-commit/
+- Generally follow linux kernel c coding standards
+- Keep line lengths < 81 characters long
 - Try to avoid merge bubble commits due to local changes by using `rebase`
 - Do not commit binary files (e.g. executables, images, etc.)
 - Do not force push
