@@ -23,6 +23,9 @@
  */
 int
 check_acl_access(char const *restrict basename, char const *restrict username) {
+    if (basename == NULL || username == NULL)
+        goto deny_access;
+
     int str_len = strlen(basename);
     // len(.acl\0) == 5
     char *acl_path = malloc(str_len + 5);
