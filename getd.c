@@ -15,6 +15,7 @@
 #include "apue.h"
 #include "jlibc/hashmap/hashmap.h"
 #include "message.h"
+#include "acl.h"
 
 
 #define initmsgtype(N) {.header.messageType = N,\
