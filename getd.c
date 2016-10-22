@@ -38,6 +38,19 @@ void safe_sid_copy(char *dest, char const *src) {
 }
 
 
+/*
+ * Checks that a path is a full path spec
+ * Return:
+ *   1 if path starts with a / (aka is a full path) and is not NULL
+ *   0 otherwise
+ */
+int is_full_path(char *path)
+{
+    return (path != NULL && path[0] == '/');
+}
+
+
+
 /* TYPE 2
  * Send a NULL terminated length-limited error message to the client.
  *
