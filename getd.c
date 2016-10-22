@@ -70,6 +70,7 @@ void handle0(int sock, MessageType0 *buffer)
  */
 void establish_session(int sock, char const *username)
 {
+    printf("Sending type 1; Username: %s\n", username);
     MessageType1 response = initsidtype(1);
 
     char random_id[SID_LENGTH];
@@ -87,7 +88,9 @@ void establish_session(int sock, char const *username)
     strncpy(un, username, un_len);
     un[un_len] = 0;
 
-    putElement(sessions, random_id, un);
+    // Use response.sessionId here because this one will be correctly nulled
+    // at the end due to using safe_sid_copy
+    putElement(sessions, response.sessionId, un);
 
     sendtype(1, sock, &response);
 }
@@ -121,7 +124,13 @@ void handle3(int sock, MessageType3 *buffer)
     } else {
         printf("Session id: %s\n", buffer->sessionId);
         printf("Path: %s\n", buffer->pathName);
-        file_transfer(sock, buffer->sessionId, buffer->pathName);
+
+        char *username = (char*)getElement(sessions, buffer->sessionId);
+        if (check_acl_access(buffer->pathName, username) == 1) {
+            file_transfer(sock, buffer->sessionId, buffer->pathName);
+        } else {
+            send_error(sock, "Access to file denied.");
+        }
     }
 }
 

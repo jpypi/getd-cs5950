@@ -37,20 +37,24 @@ check_acl_access(char const *restrict basename, char const *restrict username) {
     if (fd != NULL) {
         struct stat file_stat;
         if (fstat(fileno(fd), &file_stat) != 0) {
-            err_sys(BROKEN_OR_EVIL);
-            return 0;
+            err_ret(BROKEN_OR_EVIL);
+            goto deny_access;
         }
 
         if ((file_stat.st_mode & S_IRWXG) > 0 ||
-                (file_stat.st_mode & S_IRWXO) > 0)
+                (file_stat.st_mode & S_IRWXO) > 0) {
             // The ACL file has wrong permissions DON'T DO ANYTHING!
             // (And by wrong permissions it is meant there are some kind of
             //  world or group perms which is a red flag. ABORT!)
-            DEBUG0(err_quit("ERROR: ACL file for %s has the wrong permissions.",
-                     basename));
+            err_msg("ERROR: ACL file for %s has the wrong permissions.",
+                    basename);
+            goto deny_access;
+        }
 
-        if (file_stat.st_uid != geteuid())
-            DEBUG0(err_quit("ERROR: Owner does not own the ACL file."));
+        if (file_stat.st_uid != geteuid()) {
+            err_msg("ERROR: Owner does not own the ACL file.");
+            goto deny_access;
+        }
 
         char *line = NULL;
         size_t linecap = 0;
@@ -72,9 +76,11 @@ check_acl_access(char const *restrict basename, char const *restrict username) {
         if (line != NULL) free(line);
 
     } else if (errno == ENOENT || errno == EACCES) {
-        DEBUG0(err_sys("%s", acl_path));
+        err_ret("%s", acl_path);
+        goto deny_access;
     }
 
+deny_access:
     // Well, guess the user isn't allowed!
     return 0;
 }
