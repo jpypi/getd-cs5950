@@ -13,8 +13,8 @@
 #include <nanomsg/pair.h>
 
 #include "apue.h"
-#include "message.h"
 #include "jlibc/hashmap/hashmap.h"
+#include "message.h"
 
 
 #define initmsgtype(N) {.header.messageType = N,\
@@ -26,8 +26,10 @@
 
 HashMap *sessions;
 
+
 /*
- *
+ * A safe copy for session ids. Always only use nlength and set a null byte at
+ * the end of the dest.
  */
 void safe_sid_copy(char *dest, char const *src) {
     strncpy(dest, src, SID_LENGTH);
