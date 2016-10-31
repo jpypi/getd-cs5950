@@ -200,6 +200,7 @@ void file_transfer(int sock, char *session_id, char *path)
 void server_loop(int sock)
 {
     int bytes_read = 0;
+    char expect = TYPE0;
 
     while(1) {
         void *buffer = NULL;
@@ -216,15 +217,31 @@ void server_loop(int sock)
             err_quit("Error: %s", nn_strerror(errno));
         }
 
+        if (bytes_read != msg_header->messageLength) {
+		//TODO: non-matching size error
+		expect = TYPE0;
+	}
+
+        if (expect != msg_header->messageType) {
+            if (msg_header->messageType == TYPE2) {
+                //TODO: type 2 error
+            } else {
+                //TODO: unexpected type error
+                err_msg("unexpected message type received");
+            }
+            expect = TYPE0;
+        }
 
         switch(msg_header->messageType) {
             case TYPE0:
                 handle0(sock, (MessageType0*)buffer);
+                expect = TYPE3;
                 break;
             case TYPE3:
                 handle3(sock, (MessageType3*)buffer);
+                expect = TYPE6;
                 break;
-            default:
+            default: //TODO: does control return here during TYPE4/TYPE6 exchange?
                 break;
         }
 
