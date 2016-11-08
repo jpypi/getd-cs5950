@@ -92,6 +92,8 @@ void establish_session(int sock, char const *username)
     // at the end due to using safe_sid_copy
     putElement(sessions, response.sessionId, un);
 
+    printf("Session ID: %s\n", response.sessionId);
+
     sendtype(1, sock, &response);
 }
 
@@ -126,6 +128,8 @@ void handle3(int sock, MessageType3 *buffer)
         printf("Path: %s\n", buffer->pathName);
 
         char *username = (char*)getElement(sessions, buffer->sessionId);
+
+        printf("User: %s\n", username);
         if (check_acl_access(buffer->pathName, username) == 1) {
             file_transfer(sock, buffer->sessionId, buffer->pathName);
         } else {
@@ -156,8 +160,15 @@ int expect_ack(int sock, char const *session_id)
     MessageType6 *buffer = NULL;
 
     int bytes_read = nn_recv(sock, &buffer, NN_MSG, 0);
-    if (bytes_read != sizeof(MessageType6)) {
-        send_error(sock, "Invalid ACK (message type 6) session id!");
+    //if (bytes_read != sizeof(MessageType6)) {
+    //    send_error(sock, "Invalid ACK (message type 6) session id!");
+    //    return 0;
+    //}
+    Header *msg_header = (Header*)buffer;
+    if (!msg_ok(TYPE6, bytes_read, msg_header, buffer, sock)) {
+        //printf("!!!!173!!!!\n");
+        freeHashMap(sessions, free);
+        sessions = initHashMap(20, NULL);
         return 0;
     }
 
@@ -189,11 +200,108 @@ void file_transfer(int sock, char *session_id, char *path)
         }
 
         sendtype(4, sock, &response);
-        expect_ack(sock, session_id);
+        if (expect_ack(sock, session_id) == 0) {
+            return;
+        }
     }
 
     end_session(sock, session_id);
     expect_ack(sock, session_id);
+}
+
+
+int msg_ok(char expect,int bytes_read,Header * msg_header,void * buffer, int sock)
+{
+    if (bytes_read != msg_header->messageLength) {
+        send_error(sock, "Malformed message header");
+        return 0;
+    }
+
+    if (expect != msg_header->messageType) {
+        if (msg_header->messageType != TYPE2) {
+            send_error(sock, "unexpected message type received");
+            return 0;
+        }
+    }
+
+    switch (msg_header->messageType) {
+        case TYPE0:
+            if (sizeof(MessageType0) != bytes_read) {
+                send_error(sock, "Malformed Message");
+                return 0;
+            } else {
+                MessageType0 *msg = (MessageType0*)buffer;
+                if (msg->dnLength <= 0 || msg->dnLength > DN_LENGTH) {
+                    send_error(sock, "Malformed Message");
+                    return 0;
+                } else if(msg->dnLength != strnlen(msg->distinguishedName, DN_LENGTH+1)) {
+                    send_error(sock, "Malformed Message");
+                    return 0;
+                }
+            }
+            break;
+        case TYPE2:
+            if (sizeof(MessageType2) != bytes_read) {
+                send_error(sock, "Malformed Message");
+                return 0;
+            } else {
+                MessageType2 *msg = (MessageType2*)buffer;
+                if (msg->msgLength <= 0 || msg->msgLength > MAX_ERROR_MESSAGE) {
+                    send_error(sock, "Malformed Message");
+                    return 0;
+                } else if(msg->msgLength != strnlen(msg->errorMessage, MAX_ERROR_MESSAGE+1)) {
+                    send_error(sock, "Malformed Message");
+                    return 0;
+                } else {
+                    printf("Received type 2 message:%s\n", msg->errorMessage);
+                    return 0;
+                }
+            }
+            break;
+        case TYPE3:
+            if (sizeof(MessageType3) != bytes_read) {
+                send_error(sock, "Malformed Message");
+                return 0;
+            } else {
+                MessageType3 *msg = (MessageType3*)buffer;
+                if (msg->sidLength <= 0 || msg->sidLength > SID_LENGTH ||
+                      msg->pathLength <= 0 || msg->pathLength > PATH_MAX) {
+                    send_error(sock, "Malformed Message");
+                    return 0;
+                } else if(msg->sidLength != strnlen(msg->sessionId, SID_LENGTH+1) ||
+                            msg->pathLength != strnlen(msg->pathName, PATH_MAX+1)) {
+                    send_error(sock, "Malformed Message");
+                    return 0;
+                } else if(getElement(sessions, msg->sessionId) == NULL) {
+                    send_error(sock, "T3: Invalid session id");
+                }//TEST
+//                delElement(sessions, msg->sessionId);
+            }
+            break;
+        case TYPE6:
+            if (sizeof(MessageType6) != bytes_read) {
+                send_error(sock, "Malformed Message");
+                return 0;
+            } else {
+                MessageType6 *msg = (MessageType6*)buffer;
+                if (msg->sidLength <= 0 || msg->sidLength > SID_LENGTH) {
+                    send_error(sock, "Malformed Message");
+                    return 0;
+                } else if(msg->sidLength != strnlen(msg->sessionId, SID_LENGTH+1)) {
+                    send_error(sock, "Malformed Message");
+                    return 0;
+                } else if(getElement(sessions, msg->sessionId) == NULL) {
+                    send_error(sock, "T6: Invalid session id");
+                }
+                //test
+            }
+            break;
+        default: //should never be reached, but just in case
+            send_error(sock, "Unexpected Message Type");
+            return 0;
+            break;
+    }
+    return 1;
 }
 
 
@@ -217,19 +325,13 @@ void server_loop(int sock)
             err_quit("Error: %s", nn_strerror(errno));
         }
 
-        if (bytes_read != msg_header->messageLength) {
-		//TODO: non-matching size error
-		expect = TYPE0;
-	}
-
-        if (expect != msg_header->messageType) {
-            if (msg_header->messageType == TYPE2) {
-                //TODO: type 2 error
-            } else {
-                //TODO: unexpected type error
-                err_msg("unexpected message type received");
-            }
+        if (!msg_ok(expect, bytes_read, msg_header, buffer, sock)) {
+            //printf("!!!!335!!!!\n");
             expect = TYPE0;
+            freeHashMap(sessions, free);
+            sessions = initHashMap(20, NULL);
+            nn_freemsg(buffer);
+            continue;
         }
 
         switch(msg_header->messageType) {
@@ -239,11 +341,15 @@ void server_loop(int sock)
                 break;
             case TYPE3:
                 handle3(sock, (MessageType3*)buffer);
-                expect = TYPE6;
+                expect = TYPE0;
+                freeHashMap(sessions, free);
+                sessions = initHashMap(20, NULL);
                 break;
             default: //TODO: does control return here during TYPE4/TYPE6 exchange?
                 break;
         }
+        
+        //printf("!!!!356!!!!\n");
 
         nn_freemsg(buffer);
     }
