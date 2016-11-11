@@ -73,12 +73,18 @@ void establish_session(int sock, char const *username)
     printf("Sending type 1; Username: %s\n", username);
     MessageType1 response = initsidtype(1);
 
+    static const char alphanum[] =
+        "0123456789"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz";
+
     char random_id[SID_LENGTH];
-    for (int i = 0; i < SID_LENGTH; i += sizeof(long int))
-        *(random_id+i) = random();
+    //for (int i = 0; i < SID_LENGTH; i += sizeof(long int))
+    //    *(random_id+i) = random();
 
     for (int i = 0; i < SID_LENGTH; i++)
-        random_id[i] = (random_id[i] & 0x3f) + 'A';
+    //    random_id[i] = (random_id[i] & 0x3f) + 'A';
+        random_id[i] = (alphanum[/*random_id[i]*/random()%(sizeof(alphanum)-1)]);
 
     safe_sid_copy(response.sessionId, random_id);
 
@@ -105,6 +111,8 @@ void establish_session(int sock, char const *username)
  */
 int send_error(int sock, char *error_text)
 {
+    printf("Sending Type 2 Message: %s\n", error_text);
+
     MessageType2 err_msg = initmsgtype(2);
     err_msg.msgLength = strnlen(error_text, MAX_ERROR_MESSAGE);
     strncpy(err_msg.errorMessage, error_text, MAX_ERROR_MESSAGE);
@@ -157,22 +165,26 @@ void end_session(int sock, char const *session_id)
 int expect_ack(int sock, char const *session_id)
 {
     printf("Expecting an ack\n");
-    MessageType6 *buffer = NULL;
+    //MessageType6 *buffer = NULL;
 
-    int bytes_read = nn_recv(sock, &buffer, NN_MSG, 0);
+    char buffer[MAX_BUFFER_SIZE];
+    clean_buffer(buffer, MAX_BUFFER_SIZE);
+
+    int bytes_read = nn_recv(sock, &buffer, MAX_BUFFER_SIZE, 0);
     //if (bytes_read != sizeof(MessageType6)) {
     //    send_error(sock, "Invalid ACK (message type 6) session id!");
     //    return 0;
     //}
-    Header *msg_header = (Header*)buffer;
-    if (!msg_ok(TYPE6, bytes_read, msg_header, buffer, sock)) {
+
+
+    if (!msg_ok(TYPE6, bytes_read, buffer, sock)) {
         //printf("!!!!173!!!!\n");
         freeHashMap(sessions, free);
         sessions = initHashMap(20, NULL);
         return 0;
     }
 
-    printf("Ack sid: %s\n", buffer->sessionId);
+    printf("Ack sid: %s\n", ((MessageType6*)buffer)->sessionId);
     return 1;
 }
 
@@ -210,86 +222,123 @@ void file_transfer(int sock, char *session_id, char *path)
 }
 
 
-int msg_ok(char expect,int bytes_read,Header * msg_header,void * buffer, int sock)
+/*
+ * Runs all validation checks for received messages
+ * Should flag any non-conformant message
+ * Does not verify contents of strings
+ */
+int msg_ok(char expect,int bytes_read,void * buffer, int sock)
 {
-    if (bytes_read != msg_header->messageLength) {
+    //printf("bufaddr: %p\n", buffer);
+
+    Header *msg_header;
+        //check that the message wasn't empty somehow
+    if (bytes_read <= 0) {
+        msg_header = (Header*)buffer;
+        err_quit("Error: %s", nn_strerror(errno));
+        //check that at least a full header was read
+    } else if (bytes_read <= sizeof(Header)) {
+        send_error(sock, "Invalid message length: could not read header");
+        return 0;
+    } else {
+        msg_header = (Header*)buffer;
+
+        printf("Bytes read: %d\n", bytes_read);
+        printf("Message type: %d\n", msg_header->messageType);
+        printf("Message size: %d\n", msg_header->messageLength);
+    }
+        //check actual message size against reported
+    if (bytes_read != msg_header->messageLength) { 
         send_error(sock, "Malformed message header");
         return 0;
     }
-
+        //check expected message type against reported
     if (expect != msg_header->messageType) {
         if (msg_header->messageType != TYPE2) {
             send_error(sock, "unexpected message type received");
             return 0;
         }
     }
-
+        //handle each message type
     switch (msg_header->messageType) {
         case TYPE0:
+                //check actual message size against correct message size
             if (sizeof(MessageType0) != bytes_read) {
-                send_error(sock, "Malformed Message");
+                send_error(sock, "Malformed Message: invalid message length for TYPE0");
                 return 0;
             } else {
                 MessageType0 *msg = (MessageType0*)buffer;
+                    //check reported distinguishes name length within bounds
                 if (msg->dnLength <= 0 || msg->dnLength > DN_LENGTH) {
-                    send_error(sock, "Malformed Message");
+                    send_error(sock, "Malformed Message: invalid distinguished name length");
                     return 0;
+                    //check reported distinguished name length against actual distinguished name length
                 } else if(msg->dnLength != strnlen(msg->distinguishedName, DN_LENGTH+1)) {
-                    send_error(sock, "Malformed Message");
+                    send_error(sock, "Malformed Message: distinguished name length does not match");
                     return 0;
                 }
             }
             break;
         case TYPE2:
+                //check actual message size against correct message size
             if (sizeof(MessageType2) != bytes_read) {
-                send_error(sock, "Malformed Message");
+                send_error(sock, "Malformed Message: invalid message length for TYPE2");
                 return 0;
             } else {
                 MessageType2 *msg = (MessageType2*)buffer;
+                    //check reported error message length within bounds
                 if (msg->msgLength <= 0 || msg->msgLength > MAX_ERROR_MESSAGE) {
-                    send_error(sock, "Malformed Message");
+                    send_error(sock, "Malformed Message: invalid error message length");
                     return 0;
+                    //check reported error message length against actual error message length
                 } else if(msg->msgLength != strnlen(msg->errorMessage, MAX_ERROR_MESSAGE+1)) {
-                    send_error(sock, "Malformed Message");
+                    send_error(sock, "Malformed Message: error message length does not match");
                     return 0;
-                } else {
+                } else { //print error message
                     printf("Received type 2 message:%s\n", msg->errorMessage);
                     return 0;
                 }
             }
             break;
         case TYPE3:
+                //check actual message size against correct message size
             if (sizeof(MessageType3) != bytes_read) {
-                send_error(sock, "Malformed Message");
+                send_error(sock, "Malformed Message: invalid message length for TYPE3");
                 return 0;
             } else {
                 MessageType3 *msg = (MessageType3*)buffer;
+                    //check reported sid length and path length within bounds
                 if (msg->sidLength <= 0 || msg->sidLength > SID_LENGTH ||
                       msg->pathLength <= 0 || msg->pathLength > PATH_MAX) {
-                    send_error(sock, "Malformed Message");
+                    send_error(sock, "Malformed Message: invalid sid/path length");
                     return 0;
+                    //check reported sid and path length against actual sid and path length
                 } else if(msg->sidLength != strnlen(msg->sessionId, SID_LENGTH+1) ||
                             msg->pathLength != strnlen(msg->pathName, PATH_MAX+1)) {
-                    send_error(sock, "Malformed Message");
+                    send_error(sock, "Malformed Message: sid/path length does not match");
                     return 0;
+                    //check if sid is valid
                 } else if(getElement(sessions, msg->sessionId) == NULL) {
                     send_error(sock, "T3: Invalid session id");
-                }//TEST
-//                delElement(sessions, msg->sessionId);
+                }
             }
             break;
         case TYPE6:
+                //check actual message size against correct message size
             if (sizeof(MessageType6) != bytes_read) {
-                send_error(sock, "Malformed Message");
+                send_error(sock, "Malformed Message: invalid message length for TYPE6");
                 return 0;
             } else {
                 MessageType6 *msg = (MessageType6*)buffer;
+                    //check reported sid length within bounds
                 if (msg->sidLength <= 0 || msg->sidLength > SID_LENGTH) {
-                    send_error(sock, "Malformed Message");
+                    send_error(sock, "Malformed Message: invalid sid length");
                     return 0;
+                    //check reported sid length against actual sid length
                 } else if(msg->sidLength != strnlen(msg->sessionId, SID_LENGTH+1)) {
-                    send_error(sock, "Malformed Message");
+                    send_error(sock, "Malformed Message: sid length does not match");
                     return 0;
+                    //check if sid is valid
                 } else if(getElement(sessions, msg->sessionId) == NULL) {
                     send_error(sock, "T6: Invalid session id");
                 }
@@ -305,34 +354,50 @@ int msg_ok(char expect,int bytes_read,Header * msg_header,void * buffer, int soc
 }
 
 
+/*
+ * Zeroes out buffer
+ */
+void clean_buffer(char * buffer, int size) {
+    memset(buffer, 0, size);
+}
+
+
 void server_loop(int sock)
 {
     int bytes_read = 0;
     char expect = TYPE0;
 
+    char buffer[MAX_BUFFER_SIZE];
+
     while(1) {
-        void *buffer = NULL;
+        clean_buffer(buffer, MAX_BUFFER_SIZE);
+        //void *buffer = NULL;
         Header *msg_header;
 
-        bytes_read = nn_recv(sock, &buffer, NN_MSG, 0);
-        if (bytes_read > 0) {
-            msg_header = (Header*)buffer;
+        //bytes_read = nn_recv(sock, &buffer, NN_MSG, 0);
 
-            printf("Bytes read: %d\n", bytes_read);
-            printf("Message type: %d\n", msg_header->messageType);
-            printf("Message size: %d\n", msg_header->messageLength);
-        } else {
-            err_quit("Error: %s", nn_strerror(errno));
-        }
+        bytes_read = nn_recv(sock, &buffer, MAX_BUFFER_SIZE, 0);
 
-        if (!msg_ok(expect, bytes_read, msg_header, buffer, sock)) {
+        //if (bytes_read > 0) {
+        //    msg_header = (Header*)buffer;
+
+        //    printf("Bytes read: %d\n", bytes_read);
+        //    printf("Message type: %d\n", msg_header->messageType);
+        //    printf("Message size: %d\n", msg_header->messageLength);
+        //} else {
+        //    err_quit("Error: %s", nn_strerror(errno));
+        //}
+
+        if (!msg_ok(expect, bytes_read, buffer, sock)) {
             //printf("!!!!335!!!!\n");
             expect = TYPE0;
             freeHashMap(sessions, free);
             sessions = initHashMap(20, NULL);
-            nn_freemsg(buffer);
+            //nn_freemsg(buffer);
             continue;
         }
+
+        msg_header = (Header*)buffer;
 
         switch(msg_header->messageType) {
             case TYPE0:
@@ -345,13 +410,13 @@ void server_loop(int sock)
                 freeHashMap(sessions, free);
                 sessions = initHashMap(20, NULL);
                 break;
-            default: //TODO: does control return here during TYPE4/TYPE6 exchange?
+            default: 
                 break;
         }
         
         //printf("!!!!356!!!!\n");
 
-        nn_freemsg(buffer);
+        //nn_freemsg(buffer);
     }
 }
 
