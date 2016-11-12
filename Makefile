@@ -11,7 +11,10 @@ acl.o: acl.c error.o
 error.o: error.c
 	${CC} $(CFLAGS) -c $^
 
+client: client.c error.o
+	${CC} $(CFLAGS) -o $@ $^ -lnanomsg
 
 .PHONY: clean
 clean:
-	rm getd error.o acl.o
+	rm -f *.o
+	rm -f getd client
