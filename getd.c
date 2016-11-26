@@ -248,7 +248,7 @@ int msg_ok(char expect,int bytes_read,void * buffer, int sock)
         printf("Message size: %d\n", msg_header->messageLength);
     }
         //check actual message size against reported
-    if (bytes_read != msg_header->messageLength) { 
+    if (bytes_read != msg_header->messageLength) {
         send_error(sock, "Malformed message header");
         return 0;
     }
@@ -410,10 +410,10 @@ void server_loop(int sock)
                 freeHashMap(sessions, free);
                 sessions = initHashMap(20, NULL);
                 break;
-            default: 
+            default:
                 break;
         }
-        
+
         //printf("!!!!356!!!!\n");
 
         //nn_freemsg(buffer);
@@ -438,7 +438,7 @@ int main(int argc, char *argv[])
     if (sock < 0)
         err_quit("Couldn't build a socket");
 
-    if (nn_bind(sock, "ipc:///tmp/getd.ipc") < 0)
+    if (nn_bind(sock, "ipc:///tmp/sgetd.ipc") < 0)
         err_quit("We've got an error yo.");
 
     server_loop(sock);

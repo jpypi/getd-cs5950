@@ -19,6 +19,7 @@
 #define SID_LENGTH 128
 #define MAX_CONTENT_LENGTH 4096
 #define MAX_ERROR_MESSAGE 256
+#define SYM_KEY_LENGTH 56
 //#define PATH_MAX 4096
 
 #define INVALID_MESSAGE_RECVD -1
@@ -51,6 +52,7 @@ typedef struct _type1 {
   Header header;
   unsigned int sidLength;
   char sessionId[SID_LENGTH+1];
+  char symmetricKey[SYM_KEY_LENGTH];
 } MessageType1;
 
 typedef struct _type2 {
