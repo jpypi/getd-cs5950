@@ -17,4 +17,4 @@ client: client.c error.o
 .PHONY: clean
 clean:
 	rm -f *.o
-	rm -f getd client
+	rm -f sgetd client
