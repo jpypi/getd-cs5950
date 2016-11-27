@@ -1,7 +1,7 @@
 #ifndef _MESSAGE_H_
 #define _MESSAGE_H_
 
-#include <limits.h>
+#include <linux/limits.h>
 //#include <util/general.h>
 
 #define DEBUG_MSG
@@ -19,6 +19,7 @@
 #define SID_LENGTH 128
 #define MAX_CONTENT_LENGTH 4096
 #define MAX_ERROR_MESSAGE 256
+// IF SYM_KEY_LENGTH > MAXINT or < 0 YOU WILL HAVE PROBLEMS YOU HAVE BEEN WARNED
 #define SYM_KEY_LENGTH 56
 //#define PATH_MAX 4096
 
