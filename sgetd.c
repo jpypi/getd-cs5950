@@ -59,6 +59,7 @@ void checkCryptNormal(int returnCode, char *routineName, int line){
 
 
 /*
+ * Abstraction around opening cryptlib keysets from a given file
  */
 void open_keyset(char *file, CRYPT_KEYSET *keyset) {
     struct passwd *user_info = getpwuid(getuid());
@@ -136,6 +137,8 @@ char * pgp_decrypt(char *encrypted_buffer, int data_size, int expect_size) {
 
 
 /*
+ * Does pubkey encryption used for the initial respons to the client.
+ * Returns: length of encrypted data
  */
 int pgp_encrypt(char *buffer, unsigned int size, char **enc_data) {
     int ret = 0;
