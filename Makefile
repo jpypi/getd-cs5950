@@ -5,10 +5,10 @@ CFLAGS=-pedantic -Wall -std=c99
 sgetd: sgetd.c error.o acl.o util.o jlibc/hashmap/hashmap.c
 	$(CC) $(CFLAGS) -o $@ $^ -lnanomsg
 
-acl.o: acl.c error.o
+acl.o: acl.c
 	$(CC) $(CFLAGS) -c $^
 
-util.o: util.c error.o
+util.o: util.c
 	$(CC) $(CFLAGS) -c $^
 
 error.o: error.c
