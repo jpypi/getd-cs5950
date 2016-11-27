@@ -1,5 +1,5 @@
-#ifndef _GETD_H_
-#define _GETD_H_
+#ifndef _SGETD_H_
+#define _SGETD_H_
 
 #define MAX_BUFFER_SIZE 5120
 

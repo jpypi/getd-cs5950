@@ -20,7 +20,7 @@
 #include "util.h"
 
 // This is used so that functions can be ordered more logically
-#include "getd.h"
+#include "sgetd.h"
 
 #define initmsgtype(N) {.header.messageType = N,\
                         .header.messageLength = sizeof(MessageType ## N)}

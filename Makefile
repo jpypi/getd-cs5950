@@ -2,7 +2,7 @@ CC=gcc
 CFLAGS=-pedantic -Wall -std=c99
 
 
-sgetd: getd.c error.o acl.o util.o jlibc/hashmap/hashmap.c
+sgetd: sgetd.c error.o acl.o util.o jlibc/hashmap/hashmap.c
 	$(CC) $(CFLAGS) -o $@ $^ -lnanomsg
 
 acl.o: acl.c error.o
