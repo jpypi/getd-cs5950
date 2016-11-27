@@ -137,8 +137,55 @@ char * pgp_decrypt(char *encrypted_buffer, int data_size, int expect_size) {
 
 /*
  */
-char * pgp_encrypt(char *buffer) {
-    return NULL;
+int pgp_encrypt(char *buffer, unsigned int size, char **enc_data) {
+    int ret = 0;
+    int bytes_copied = 0;
+    CRYPT_KEYSET keyset;
+    CRYPT_ENVELOPE data_envelope;
+    // TODO: This is fine for testing, but needs to be fixed for prod
+    char *recipient = "vagrant";
+    unsigned int recipient_len = strlen(recipient);
+
+    // Open the keyset
+    open_keyset(GPG_PUB, &keyset);
+
+    // Create an envelope
+    ret = cryptCreateEnvelope(&data_envelope, CRYPT_UNUSED, CRYPT_FORMAT_PGP);
+    checkCryptNormal(ret, "cryptCreateEnvelope", __LINE__);
+
+    // Set the keyset for the envelope
+    ret = cryptSetAttribute(data_envelope, CRYPT_ENVINFO_KEYSET_ENCRYPT, keyset);
+    checkCryptNormal(ret, "cryptSetAttribute", __LINE__);
+
+
+    // Pick the pub key to use
+    ret = cryptSetAttributeString(data_envelope, CRYPT_ENVINFO_RECIPIENT,
+                                  recipient, recipient_len);
+    checkCryptNormal(ret, "cryptSetAttributeString", __LINE__);
+
+    // Set envelope data size and push data
+    ret = cryptSetAttribute(data_envelope, CRYPT_ENVINFO_DATASIZE, size);
+    ret = cryptPushData(data_envelope, buffer, size, &bytes_copied);
+    checkCryptNormal(ret, "cryptPushData", __LINE__);
+
+    // Flush the data
+    ret = cryptFlushData(data_envelope);
+    checkCryptNormal(ret, "cryptFlushData", __LINE__);
+
+    int enc_size = size+291+1024;
+    *enc_data = malloc(enc_size);
+    if (*enc_data == NULL)
+        err_sys("malloc error line %d", __LINE__);
+
+    ret = cryptPopData(data_envelope, *enc_data, enc_size, &bytes_copied);
+    enc_size = bytes_copied;
+
+    ret = cryptDestroyEnvelope(data_envelope);
+    checkCryptNormal(ret, "cryptDestroyEnvelope", __LINE__);
+    cryptKeysetClose(keyset);
+    checkCryptNormal(ret, "cryptKeysetClose", __LINE__);
+
+    return enc_size;
 }
 
 
@@ -187,8 +234,10 @@ void establish_session(int sock, char const *username)
     putElement(sessions, response.sessionId, sess);
 
     printf("Session ID: %s\n", response.sessionId);
+    char *enc_buffer = NULL;
+    int length = pgp_encrypt((char*)&response, sizeof(response), &enc_buffer);
 
-    sendtype(1, sock, &response);
+    nn_send(sock, enc_buffer, length, 0);
 }
 
 
@@ -451,16 +500,15 @@ void server_loop(int sock)
 
     while(1) {
         //memset(buffer, 0, MAX_BUFFER_SIZE);
-        void *buffer = NULL;
+        void *data = NULL;
         Header *msg_header;
 
-        bytes_read = nn_recv(sock, &buffer, NN_MSG, 0);
+        printf("receiving\n");
+        bytes_read = nn_recv(sock, &data, NN_MSG, 0);
 
-        char *data = pgp_decrypt((char*) buffer, bytes_read, sizeof(MessageType0));
-        printf("type: %d\n", ((MessageType0*)data)->header.messageType);
-        printf("len: %d\n", ((MessageType0*)data)->header.messageLength);
-        printf("dnl: <%d>\n", ((MessageType0*)data)->dnLength);
-        printf("dn: <%s>\n", ((MessageType0*)data)->distinguishedName);
+        char *buffer = pgp_decrypt((char*) data,
+                                   bytes_read,
+                                   sizeof(MessageType0));
 
         //bytes_read = nn_recv(sock, &buffer, MAX_BUFFER_SIZE, 0);
 
@@ -474,6 +522,7 @@ void server_loop(int sock)
         //    err_quit("Error: %s", nn_strerror(errno));
         //}
 
+        /*
         if (!msg_ok(expect, bytes_read, buffer, sock)) {
             //printf("!!!!335!!!!\n");
             expect = TYPE0;
@@ -482,6 +531,7 @@ void server_loop(int sock)
             //nn_freemsg(buffer);
             continue;
         }
+        */
 
         msg_header = (Header*)buffer;
 
