@@ -146,7 +146,7 @@ int expect_ack(int sock, char const *session_id)
     //MessageType6 *buffer = NULL;
 
     char buffer[MAX_BUFFER_SIZE];
-    clean_buffer(buffer, MAX_BUFFER_SIZE);
+    memset(buffer, 0, MAX_BUFFER_SIZE);
 
     int bytes_read = nn_recv(sock, &buffer, MAX_BUFFER_SIZE, 0);
     //if (bytes_read != sizeof(MessageType6)) {
@@ -332,14 +332,6 @@ int msg_ok(char expect,int bytes_read,void * buffer, int sock)
 }
 
 
-/*
- * Zeroes out buffer
- */
-void clean_buffer(char * buffer, int size) {
-    memset(buffer, 0, size);
-}
-
-
 void server_loop(int sock)
 {
     int bytes_read = 0;
@@ -348,7 +340,7 @@ void server_loop(int sock)
     char buffer[MAX_BUFFER_SIZE];
 
     while(1) {
-        clean_buffer(buffer, MAX_BUFFER_SIZE);
+        memset(buffer, 0, MAX_BUFFER_SIZE);
         //void *buffer = NULL;
         Header *msg_header;
 
