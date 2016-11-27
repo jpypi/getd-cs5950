@@ -11,6 +11,7 @@
 #include <pwd.h>
 #include <sys/resource.h>
 #include <sys/types.h>
+#include <sys/mman.h>
 
 #include <nanomsg/nn.h>
 #include <nanomsg/pair.h>
@@ -37,6 +38,11 @@ static char GPG_SEC[] = "/.gnupg/secring.gpg";
 static char GPG_PUB[] = "/.gnupg/pubring.gpg";
 
 HashMap *sessions;
+
+struct Session {
+    char username[DN_LENGTH+1];
+    char session_key[SYM_KEY_LENGTH];
+};
 
 
 /*
@@ -152,30 +158,31 @@ void establish_session(int sock, char const *username)
     printf("Sending type 1; Username: %s\n", username);
     MessageType1 response = initsidtype(1);
 
-    static const char alphanum[] =
-        "0123456789"
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        "abcdefghijklmnopqrstuvwxyz";
-
     char random_id[SID_LENGTH];
-    //for (int i = 0; i < SID_LENGTH; i += sizeof(long int))
-    //    *(random_id+i) = random();
+    for (int i = 0; i < SID_LENGTH; i += sizeof(long int))
+        *(random_id+i) = random();
 
     for (int i = 0; i < SID_LENGTH; i++)
-    //    random_id[i] = (random_id[i] & 0x3f) + 'A';
-        random_id[i] = (alphanum[/*random_id[i]*/random()%(sizeof(alphanum)-1)]);
+        random_id[i] = (random_id[i] & 0x3f) + 'A';
 
     safe_sid_copy(response.sessionId, random_id);
 
-    // TODO: Double check this is safe. Probably use strnlen.
-    unsigned int un_len = strlen(username);
-    char *un = malloc(un_len+1);
-    strncpy(un, username, un_len);
-    un[un_len] = 0;
+    struct Session *sess = malloc(sizeof(*sess));
 
-    // Use response.sessionId here because this one will be correctly nulled
-    // at the end due to using safe_sid_copy
-    putElement(sessions, response.sessionId, un);
+    unsigned int un_len = strnlen(username, DN_LENGTH);
+    strncpy(sess->username, username, un_len);
+    sess->username[un_len] = 0;
+
+    char *session_key = gen_symmetric_key(SYM_KEY_LENGTH);
+    memcpy(sess->session_key, session_key, SYM_KEY_LENGTH);
+
+    memset(session_key, 0, SYM_KEY_LENGTH);
+    munlock(session_key, SYM_KEY_LENGTH);
+    free(session_key);
+
+    // Using response.sessionId because this one will be properly null
+    // terminated from using safe_sid_copy.
+    putElement(sessions, response.sessionId, sess);
 
     printf("Session ID: %s\n", response.sessionId);
 
