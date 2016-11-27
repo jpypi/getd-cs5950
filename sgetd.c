@@ -70,6 +70,8 @@ void open_keyset(char *file, CRYPT_KEYSET *keyset) {
     int ret = cryptKeysetOpen(keyset, CRYPT_UNUSED, CRYPT_KEYSET_FILE,
                               keyring_file, CRYPT_KEYOPT_READONLY);
     checkCryptNormal(ret,"cryptKeysetOpen",__LINE__);
+
+    free(keyring_file);
 }
 
 
