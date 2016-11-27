@@ -13,22 +13,22 @@
  * the key resides.
  * Returns: Pointer to the key on the heap
  */
-char * gen_symmetric_key() {
+char * gen_symmetric_key(unsigned int length) {
     unsigned int total = 0;
     unsigned int bytes_read = 0;
 
-    char *key = malloc(SYM_KEY_LENGTH);
+    char *key = malloc(length);
     if (key == NULL)
         err_sys("Could not allocate space for symmetric key on heap");
 
-    if (mlock(key, SYM_KEY_LENGTH) < 0)
+    if (mlock(key, length) < 0)
         err_sys("Could not lock private session encryption key in memory");
 
     int urand_fd = open("/dev/urandom", O_RDONLY);
     if (urand_fd == -1) err_sys("Could not open /dev/urandom for entropy");
 
-    while (total < SYM_KEY_LENGTH) {
-        bytes_read = read(urand_fd, &key[total], SYM_KEY_LENGTH - total);
+    while (total < length) {
+        bytes_read = read(urand_fd, &key[total], length - total);
         total += bytes_read;
     }
 
