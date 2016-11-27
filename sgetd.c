@@ -81,9 +81,6 @@ void open_keyset(char *file, CRYPT_KEYSET *keyset) {
  * Returns: pointer to decrypted data
  */
 char * pgp_decrypt(char *encrypted_buffer, int data_size, int expect_size) {
-    printf("Data size: %d Decrypted size: %d Type0 size: %d\n",
-           data_size, data_size-1028-1, sizeof(MessageType0));
-
     int ret = 0;
     int bytes_copied = 0;
     CRYPT_KEYSET keyset;
