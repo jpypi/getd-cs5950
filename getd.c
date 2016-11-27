@@ -8,6 +8,7 @@
 #include <time.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/resource.h>
 
 #include <nanomsg/nn.h>
 #include <nanomsg/pair.h>
@@ -400,7 +401,9 @@ void server_loop(int sock)
 
 int main(int argc, char *argv[])
 {
-    printf("PATH_MAX: %d\n", PATH_MAX);
+    // Limit coredump file sizes to 0 so that we don't leak any important info.
+    struct rlimit core_limit = {.rlim_cur=0, .rlim_max=0};
+    setrlimit(RLIMIT_CORE, &core_limit);
 
     // Seed the prng
     struct timespec ts;
