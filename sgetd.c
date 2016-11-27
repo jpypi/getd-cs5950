@@ -8,7 +8,9 @@
 #include <time.h>
 #include <stdio.h>
 #include <string.h>
+#include <pwd.h>
 #include <sys/resource.h>
+#include <sys/types.h>
 
 #include <nanomsg/nn.h>
 #include <nanomsg/pair.h>
@@ -18,6 +20,8 @@
 #include "message.h"
 #include "acl.h"
 #include "util.h"
+
+#include "cryptlib.h"
 
 // This is used so that functions can be ordered more logically
 #include "sgetd.h"
@@ -29,8 +33,105 @@
                         .sidLength=SID_LENGTH}
 #define sendtype(N, sock, obj) nn_send(sock, obj, sizeof(MessageType ## N), 0)
 
+static char GPG_SEC[] = "/.gnupg/secring.gpg";
+static char GPG_PUB[] = "/.gnupg/pubring.gpg";
 
 HashMap *sessions;
+
+
+/*
+ * Error handler wrapper for cryptlib functions. Borrowed from gpgEncDec.c
+ * example.
+ */
+void checkCryptNormal(int returnCode, char *routineName, int line){
+    if (cryptStatusError(returnCode)){
+        printf("Error in %s at line %d, return value %d\n",
+               routineName, line, returnCode);
+        exit(returnCode);
+    }
+}
+
+
+/*
+ */
+void open_keyset(char *file, CRYPT_KEYSET *keyset) {
+    struct passwd *user_info = getpwuid(getuid());
+    char *keyring_file = malloc(strlen(user_info->pw_dir) + strlen(file) + 1);
+    strcpy(keyring_file, user_info->pw_dir);
+    strcat(keyring_file, file);
+    printf("Reading keyring from: <%s>\n", keyring_file);
+
+    int ret = cryptKeysetOpen(keyset, CRYPT_UNUSED, CRYPT_KEYSET_FILE,
+                              keyring_file, CRYPT_KEYOPT_READONLY);
+    checkCryptNormal(ret,"cryptKeysetOpen",__LINE__);
+}
+
+
+/*
+ * Decrypts the initial request sent from the client. (via pub key crypto)
+ * Returns: pointer to decrypted data
+ */
+char * pgp_decrypt(char *encrypted_buffer, int data_size, int expect_size) {
+    printf("Data size: %d Decrypted size: %d Type0 size: %d\n",
+           data_size, data_size-1028-1, sizeof(MessageType0));
+
+    int ret = 0;
+    int bytes_copied = 0;
+    CRYPT_KEYSET keyset;
+    CRYPT_ENVELOPE data_envelope;
+
+    // Open the keyset
+    open_keyset(GPG_SEC, &keyset);
+
+    // Create envelope
+    ret = cryptCreateEnvelope(&data_envelope, CRYPT_UNUSED, CRYPT_FORMAT_AUTO);
+    checkCryptNormal(ret,"cryptCreateEnvelope",__LINE__);
+
+    // Set the keyset for the envelope
+    ret = cryptSetAttribute(data_envelope, CRYPT_ENVINFO_KEYSET_DECRYPT, keyset);
+    checkCryptNormal(ret,"cryptSetAttribute",__LINE__);
+
+    // Put data in the envelope
+    cryptPushData(data_envelope, encrypted_buffer, data_size, &bytes_copied);
+    int req_attrib = 0;
+    ret = cryptGetAttribute(data_envelope, CRYPT_ATTRIBUTE_CURRENT, &req_attrib);
+    if (req_attrib != CRYPT_ENVINFO_PRIVATEKEY)
+        err_quit("Decrypt error");
+
+    // TODO: Put the actual passphrase here for testing
+    // TODO: DON'T LEAVE THIS HERE FOR PRODUCTION
+    ret = cryptSetAttributeString(data_envelope, CRYPT_ENVINFO_PASSWORD,
+                                  "", 0);
+    if (ret != CRYPT_OK) {
+        if (ret == CRYPT_ERROR_WRONGKEY)
+            err_quit("Wrong key");
+        else
+            err_quit("cryptSetAttributeString line %d returned <%d>\n",
+                     __LINE__, ret);
+    }
+
+    ret = cryptFlushData(data_envelope);
+    checkCryptNormal(ret, "cryptFlushData", __LINE__);
+
+    char *cleartext = malloc(expect_size);
+
+    // Pull out the clear text
+    cryptPopData(data_envelope, cleartext, expect_size, &bytes_copied);
+    printf("Decrypted size: %d\n", bytes_copied);
+
+    // Time to wrap up
+    cryptDestroyEnvelope(data_envelope);
+    cryptKeysetClose(keyset);
+
+    return cleartext;
+}
+
+
+/*
+ */
+char * pgp_encrypt(char *buffer) {
+    return NULL;
+}
 
 
 /* TYPE 0
@@ -337,16 +438,22 @@ void server_loop(int sock)
     int bytes_read = 0;
     char expect = TYPE0;
 
-    char buffer[MAX_BUFFER_SIZE];
+    //char buffer[MAX_BUFFER_SIZE];
 
     while(1) {
-        memset(buffer, 0, MAX_BUFFER_SIZE);
-        //void *buffer = NULL;
+        //memset(buffer, 0, MAX_BUFFER_SIZE);
+        void *buffer = NULL;
         Header *msg_header;
 
-        //bytes_read = nn_recv(sock, &buffer, NN_MSG, 0);
+        bytes_read = nn_recv(sock, &buffer, NN_MSG, 0);
 
-        bytes_read = nn_recv(sock, &buffer, MAX_BUFFER_SIZE, 0);
+        char *data = pgp_decrypt((char*) buffer, bytes_read, sizeof(MessageType0));
+        printf("type: %d\n", ((MessageType0*)data)->header.messageType);
+        printf("len: %d\n", ((MessageType0*)data)->header.messageLength);
+        printf("dnl: <%d>\n", ((MessageType0*)data)->dnLength);
+        printf("dn: <%s>\n", ((MessageType0*)data)->distinguishedName);
+
+        //bytes_read = nn_recv(sock, &buffer, MAX_BUFFER_SIZE, 0);
 
         //if (bytes_read > 0) {
         //    msg_header = (Header*)buffer;
@@ -397,7 +504,12 @@ int main(int argc, char *argv[])
     struct rlimit core_limit = {.rlim_cur=0, .rlim_max=0};
     setrlimit(RLIMIT_CORE, &core_limit);
 
-    // Seed the prng
+    // Initialize crypt lib
+    cryptInit();
+    int ret = cryptAddRandom(NULL, CRYPT_RANDOM_SLOWPOLL);
+    checkCryptNormal(ret, "cryptAddRandom", __LINE__);
+
+    // Seed the session id prng
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     srandom((unsigned int)ts.tv_nsec);

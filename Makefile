@@ -3,7 +3,7 @@ CFLAGS=-pedantic -Wall -std=c99
 
 
 sgetd: sgetd.c error.o acl.o util.o jlibc/hashmap/hashmap.c
-	$(CC) $(CFLAGS) -o $@ $^ -lnanomsg
+	$(CC) $(CFLAGS) -o $@ $^ -lnanomsg -lcl -ldl -lresolv -lpthread -Wno-unused-result
 
 acl.o: acl.c
 	$(CC) $(CFLAGS) -c $^
