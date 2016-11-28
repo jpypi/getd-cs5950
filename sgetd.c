@@ -33,6 +33,11 @@
                         .header.messageLength = sizeof(MessageType ## N),\
                         .sidLength=SID_LENGTH}
 #define sendtype(N, sock, obj) nn_send(sock, obj, sizeof(MessageType ## N), 0)
+#define ccall(func, ...) ret = func(__VA_ARGS__);\
+                         checkCryptNormal(ret, #func, __LINE__)
+
+#define SYMMETRIC_ALG CRYPT_ALGO_BLOWFISH
+
 
 static char GPG_SEC[] = "/.gnupg/secring.gpg";
 static char GPG_PUB[] = "/.gnupg/pubring.gpg";
@@ -43,6 +48,8 @@ struct Session {
     char username[DN_LENGTH+1];
     char session_key[SYM_KEY_LENGTH];
 };
+
+struct Session *global_session;
 
 
 /*
@@ -80,7 +87,7 @@ void open_keyset(char *file, CRYPT_KEYSET *keyset) {
  * Decrypts the initial request sent from the client. (via pub key crypto)
  * Returns: pointer to decrypted data
  */
-char * pgp_decrypt(char *encrypted_buffer, int data_size, int expect_size) {
+char * pgp_decrypt(char *enc_buffer, int data_size, int expect_size) {
     int ret = 0;
     int bytes_copied = 0;
     CRYPT_KEYSET keyset;
@@ -98,7 +105,7 @@ char * pgp_decrypt(char *encrypted_buffer, int data_size, int expect_size) {
     checkCryptNormal(ret,"cryptSetAttribute",__LINE__);
 
     // Put data in the envelope
-    cryptPushData(data_envelope, encrypted_buffer, data_size, &bytes_copied);
+    cryptPushData(data_envelope, enc_buffer, data_size, &bytes_copied);
     int req_attrib = 0;
     ret = cryptGetAttribute(data_envelope, CRYPT_ATTRIBUTE_CURRENT, &req_attrib);
     if (req_attrib != CRYPT_ENVINFO_PRIVATEKEY)
@@ -107,7 +114,7 @@ char * pgp_decrypt(char *encrypted_buffer, int data_size, int expect_size) {
     // TODO: Put the actual passphrase here for testing
     // TODO: DON'T LEAVE THIS HERE FOR PRODUCTION
     ret = cryptSetAttributeString(data_envelope, CRYPT_ENVINFO_PASSWORD,
-                                  "", 0);
+                                  "secret", 6);
     if (ret != CRYPT_OK) {
         if (ret == CRYPT_ERROR_WRONGKEY)
             err_quit("Wrong key");
@@ -150,13 +157,10 @@ int pgp_encrypt(char *buffer, unsigned int size, char **enc_data) {
     open_keyset(GPG_PUB, &keyset);
 
     // Create an envelope
-    ret = cryptCreateEnvelope(&data_envelope, CRYPT_UNUSED, CRYPT_FORMAT_PGP);
-    checkCryptNormal(ret, "cryptCreateEnvelope", __LINE__);
+    ccall(cryptCreateEnvelope, &data_envelope, CRYPT_UNUSED, CRYPT_FORMAT_PGP);
 
     // Set the keyset for the envelope
-    ret = cryptSetAttribute(data_envelope, CRYPT_ENVINFO_KEYSET_ENCRYPT, keyset);
-    checkCryptNormal(ret, "cryptSetAttribute", __LINE__);
-
+    ccall(cryptSetAttribute, data_envelope, CRYPT_ENVINFO_KEYSET_ENCRYPT, keyset);
 
     // Pick the pub key to use
     ret = cryptSetAttributeString(data_envelope, CRYPT_ENVINFO_RECIPIENT,
@@ -165,37 +169,122 @@ int pgp_encrypt(char *buffer, unsigned int size, char **enc_data) {
 
     // Set envelope data size and push data
     ret = cryptSetAttribute(data_envelope, CRYPT_ENVINFO_DATASIZE, size);
-    ret = cryptPushData(data_envelope, buffer, size, &bytes_copied);
-    checkCryptNormal(ret, "cryptPushData", __LINE__);
+    ccall(cryptPushData, data_envelope, buffer, size, &bytes_copied);
 
     // Flush the data
-    ret = cryptFlushData(data_envelope);
-    checkCryptNormal(ret, "cryptFlushData", __LINE__);
+    ccall(cryptFlushData, data_envelope);
 
     int enc_size = size+291+1024;
     *enc_data = malloc(enc_size);
     if (*enc_data == NULL)
         err_sys("malloc error line %d", __LINE__);
 
-    ret = cryptPopData(data_envelope, *enc_data, enc_size, &bytes_copied);
-    enc_size = bytes_copied;
+    ccall(cryptPopData, data_envelope, *enc_data, enc_size, &bytes_copied);
+    ccall(cryptDestroyEnvelope, data_envelope);
+    ccall(cryptKeysetClose, keyset);
 
-    ret = cryptDestroyEnvelope(data_envelope);
-    checkCryptNormal(ret, "cryptDestroyEnvelope", __LINE__);
-    cryptKeysetClose(keyset);
-    checkCryptNormal(ret, "cryptKeysetClose", __LINE__);
+    return bytes_copied;
+}
 
-    return enc_size;
+
+/*
+ * Returns: size of encrypted data
+ */
+int sym_encrypt(char *data, int size, char **enc_data, char *session_id) {
+    int ret = 0;
+    int bytes_copied = 0;
+    CRYPT_ENVELOPE data_envelope;
+    CRYPT_CONTEXT symmetric_context;
+
+    struct Session *sess = getElement(sessions, session_id);
+
+    // Create an envelope
+    ret = cryptCreateEnvelope(&data_envelope, CRYPT_UNUSED,
+                              CRYPT_FORMAT_CRYPTLIB);
+    checkCryptNormal(ret, "cryptCreateEnvelope", __LINE__);
+
+    // Initialize symmetric encryption context
+    ccall(cryptCreateContext, &symmetric_context, CRYPT_UNUSED, SYMMETRIC_ALG);
+
+    // Load the session encryption key into the context
+    ccall(cryptSetAttributeString, symmetric_context, CRYPT_CTXINFO_KEY,
+            sess->session_key, SYM_KEY_LENGTH);
+
+    // Load the context to the envelope
+    ccall(cryptSetAttribute, data_envelope, CRYPT_ENVINFO_SESSIONKEY,
+            symmetric_context);
+
+    // Destroy the context
+    ccall(cryptDestroyContext, symmetric_context);
+
+    // Prep and push the data in to the envelope
+    ccall(cryptSetAttribute, data_envelope, CRYPT_ENVINFO_DATASIZE, size);
+
+    ccall(cryptPushData, data_envelope, data, size, &bytes_copied);
+    ccall(cryptFlushData, data_envelope);
+
+    // Make space for the encrypted data and pop it out
+    unsigned int enc_size = size + 2048;
+    *enc_data = malloc(enc_size);
+    if (*enc_data == NULL)
+        err_sys("malloc error line %d", __LINE__);
+
+    ccall(cryptPopData, data_envelope, *enc_data, enc_size, &bytes_copied);
+
+    // Destroy the envelope
+    ccall(cryptDestroyEnvelope, data_envelope);
+
+    return bytes_copied;
+}
+
+
+/*
+ * Used for decrypting session messages
+ */
+char * sym_decrypt(char *enc_buffer, int data_size,
+        int expect_size, char *session_id)
+{
+    int ret = 0;
+    int bytes_copied = 0;
+    CRYPT_ENVELOPE data_envelope;
+    CRYPT_CONTEXT sym_context;
+
+    //struct Session *sess = getElement(sessions, session_id);
+
+    ccall(cryptCreateEnvelope, &data_envelope, CRYPT_UNUSED, CRYPT_FORMAT_AUTO);
+
+    cryptPushData( data_envelope, enc_buffer, data_size, &bytes_copied);
+
+    ccall(cryptCreateContext, &sym_context, CRYPT_UNUSED, SYMMETRIC_ALG);
+
+    ccall(cryptSetAttributeString, sym_context, CRYPT_CTXINFO_KEY,
+            global_session->session_key, SYM_KEY_LENGTH);
+    ccall(cryptSetAttribute, data_envelope, CRYPT_ENVINFO_SESSIONKEY, sym_context);
+
+    ccall(cryptDestroyContext, sym_context);
+    ccall(cryptFlushData, data_envelope);
+
+    char *cleartext = malloc(expect_size);
+    ccall(cryptPopData, data_envelope, cleartext, expect_size, &bytes_copied);
+
+    ccall(cryptDestroyEnvelope, data_envelope);
+
+    return cleartext;
 }
 
 
 /* TYPE 0
  * A user is requesting to start a session
  */
-void handle0(int sock, MessageType0 *buffer)
+void handle0(int sock, char *buffer, unsigned int buffer_size)
 {
-    printf("Requesting User: %s\n", buffer->distinguishedName);
-    establish_session(sock, buffer->distinguishedName);
+    MessageType0 *msg = (MessageType0*)pgp_decrypt(buffer, buffer_size,
+                                                   sizeof(MessageType0));
+
+    printf("Requesting User: %s\n", msg->distinguishedName);
+    establish_session(sock, msg->distinguishedName);
+
+    free(msg);
 }
 
 
@@ -217,6 +306,7 @@ void establish_session(int sock, char const *username)
     safe_sid_copy(response.sessionId, random_id);
 
     struct Session *sess = malloc(sizeof(*sess));
+    global_session = sess;
 
     unsigned int un_len = strnlen(username, DN_LENGTH);
     strncpy(sess->username, username, un_len);
@@ -262,21 +352,25 @@ int send_error(int sock, char *error_text)
 /*
  * A user is requesting a file
  */
-void handle3(int sock, MessageType3 *buffer)
+void handle3(int sock, char *buffer, unsigned int buffer_size)
 {
     printf("Handling 3\n");
-    if (buffer->sidLength != SID_LENGTH || buffer->sessionId[SID_LENGTH] != 0) {
+    MessageType3 *msg = (MessageType3*)sym_decrypt(buffer, buffer_size,
+                                                   sizeof(MessageType3),
+                                                   "");
+
+    if (msg->sidLength != SID_LENGTH || msg->sessionId[SID_LENGTH] != 0) {
         send_error(sock, "Invalid session id.");
         return;
     } else {
-        printf("Session id: %s\n", buffer->sessionId);
-        printf("Path: %s\n", buffer->pathName);
+        printf("Session id: %s\n", msg->sessionId);
+        printf("Path: %s\n", msg->pathName);
 
-        char *username = (char*)getElement(sessions, buffer->sessionId);
+        char *username = (char*)getElement(sessions, msg->sessionId);
 
         printf("User: %s\n", username);
-        if (check_acl_access(buffer->pathName, username) == 1) {
-            file_transfer(sock, buffer->sessionId, buffer->pathName);
+        if (check_acl_access(msg->pathName, username) == 1) {
+            file_transfer(sock, msg->sessionId, msg->pathName);
         } else {
             send_error(sock, "Access to file denied.");
         }
@@ -500,27 +594,29 @@ void server_loop(int sock)
 
     while(1) {
         //memset(buffer, 0, MAX_BUFFER_SIZE);
-        void *data = NULL;
-        Header *msg_header;
+        void *buffer = NULL;
 
-        printf("receiving\n");
-        bytes_read = nn_recv(sock, &data, NN_MSG, 0);
-
-        char *buffer = pgp_decrypt((char*) data,
-                                   bytes_read,
-                                   sizeof(MessageType0));
-
+        printf("Receiving\n");
+        bytes_read = nn_recv(sock, &buffer, NN_MSG, 0);
         //bytes_read = nn_recv(sock, &buffer, MAX_BUFFER_SIZE, 0);
 
-        //if (bytes_read > 0) {
-        //    msg_header = (Header*)buffer;
+        if (bytes_read <= 0)
+            err_quit("Error: %s", nn_strerror(errno));
 
-        //    printf("Bytes read: %d\n", bytes_read);
-        //    printf("Message type: %d\n", msg_header->messageType);
-        //    printf("Message size: %d\n", msg_header->messageLength);
-        //} else {
-        //    err_quit("Error: %s", nn_strerror(errno));
-        //}
+        switch(expect) {
+            case TYPE0:
+                handle0(sock, (char*)buffer, bytes_read);
+                expect = TYPE3;
+                break;
+            case TYPE3:
+                handle3(sock, (char*)buffer, bytes_read);
+                expect = TYPE0;
+                freeHashMap(sessions, free);
+                sessions = initHashMap(20, NULL);
+                break;
+            default:
+                break;
+        }
 
         /*
         if (!msg_ok(expect, bytes_read, buffer, sock)) {
@@ -533,26 +629,7 @@ void server_loop(int sock)
         }
         */
 
-        msg_header = (Header*)buffer;
-
-        switch(msg_header->messageType) {
-            case TYPE0:
-                handle0(sock, (MessageType0*)buffer);
-                expect = TYPE3;
-                break;
-            case TYPE3:
-                handle3(sock, (MessageType3*)buffer);
-                expect = TYPE0;
-                freeHashMap(sessions, free);
-                sessions = initHashMap(20, NULL);
-                break;
-            default:
-                break;
-        }
-
-        //printf("!!!!356!!!!\n");
-
-        //nn_freemsg(buffer);
+        nn_freemsg(buffer);
     }
 }
 
