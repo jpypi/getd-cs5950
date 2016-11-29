@@ -17,7 +17,6 @@
 #include <nanomsg/pair.h>
 
 #include "apue.h"
-#include "jlibc/hashmap/hashmap.h"
 #include "message.h"
 #include "acl.h"
 #include "util.h"
@@ -42,14 +41,14 @@
 static char GPG_SEC[] = "/.gnupg/secring.gpg";
 static char GPG_PUB[] = "/.gnupg/pubring.gpg";
 
-HashMap *sessions;
 
 struct Session {
     char username[DN_LENGTH+1];
+    char session_id[SID_LENGTH+1];
     char session_key[SYM_KEY_LENGTH];
 };
 
-struct Session *global_session;
+struct Session global_session;
 
 
 /*
@@ -190,13 +189,11 @@ int pgp_encrypt(char *buffer, unsigned int size, char **enc_data) {
 /*
  * Returns: size of encrypted data
  */
-int sym_encrypt(char *data, int size, char **enc_data, char *session_id) {
+int sym_encrypt(char *data, int size, char **enc_data) {
     int ret = 0;
     int bytes_copied = 0;
     CRYPT_ENVELOPE data_envelope;
     CRYPT_CONTEXT symmetric_context;
-
-    struct Session *sess = getElement(sessions, session_id);
 
     // Create an envelope
     ret = cryptCreateEnvelope(&data_envelope, CRYPT_UNUSED,
@@ -208,7 +205,7 @@ int sym_encrypt(char *data, int size, char **enc_data, char *session_id) {
 
     // Load the session encryption key into the context
     ccall(cryptSetAttributeString, symmetric_context, CRYPT_CTXINFO_KEY,
-            sess->session_key, SYM_KEY_LENGTH);
+            global_session.session_key, SYM_KEY_LENGTH);
 
     // Load the context to the envelope
     ccall(cryptSetAttribute, data_envelope, CRYPT_ENVINFO_SESSIONKEY,
@@ -241,15 +238,12 @@ int sym_encrypt(char *data, int size, char **enc_data, char *session_id) {
 /*
  * Used for decrypting session messages
  */
-char * sym_decrypt(char *enc_buffer, int data_size,
-        int expect_size, char *session_id)
+char * sym_decrypt(char *enc_buffer, int data_size, int expect_size)
 {
     int ret = 0;
     int bytes_copied = 0;
     CRYPT_ENVELOPE data_envelope;
     CRYPT_CONTEXT sym_context;
-
-    //struct Session *sess = getElement(sessions, session_id);
 
     ccall(cryptCreateEnvelope, &data_envelope, CRYPT_UNUSED, CRYPT_FORMAT_AUTO);
 
@@ -258,11 +252,11 @@ char * sym_decrypt(char *enc_buffer, int data_size,
     ccall(cryptCreateContext, &sym_context, CRYPT_UNUSED, SYMMETRIC_ALG);
 
     ccall(cryptSetAttributeString, sym_context, CRYPT_CTXINFO_KEY,
-            global_session->session_key, SYM_KEY_LENGTH);
+            global_session.session_key, SYM_KEY_LENGTH);
     ccall(cryptSetAttribute, data_envelope, CRYPT_ENVINFO_SESSIONKEY, sym_context);
 
     ccall(cryptDestroyContext, sym_context);
-    ccall(cryptFlushData, data_envelope);
+    cryptFlushData(data_envelope);
 
     char *cleartext = malloc(expect_size);
     ccall(cryptPopData, data_envelope, cleartext, expect_size, &bytes_copied);
@@ -303,25 +297,22 @@ void establish_session(int sock, char const *username)
     for (int i = 0; i < SID_LENGTH; i++)
         random_id[i] = (random_id[i] & 0x3f) + 'A';
 
+    // Save the SID
     safe_sid_copy(response.sessionId, random_id);
 
-    struct Session *sess = malloc(sizeof(*sess));
-    global_session = sess;
-
+    // Save the username
     unsigned int un_len = strnlen(username, DN_LENGTH);
-    strncpy(sess->username, username, un_len);
-    sess->username[un_len] = 0;
+    strncpy(global_session.username, username, un_len);
+    global_session.username[un_len] = 0;
 
+    // Generate session, save, and put in message
     char *session_key = gen_symmetric_key(SYM_KEY_LENGTH);
-    memcpy(sess->session_key, session_key, SYM_KEY_LENGTH);
+    memcpy(global_session.session_key, session_key, SYM_KEY_LENGTH);
+    memcpy(response.symmetricKey, session_key, SYM_KEY_LENGTH);
 
     memset(session_key, 0, SYM_KEY_LENGTH);
     munlock(session_key, SYM_KEY_LENGTH);
     free(session_key);
-
-    // Using response.sessionId because this one will be properly null
-    // terminated from using safe_sid_copy.
-    putElement(sessions, response.sessionId, sess);
 
     printf("Session ID: %s\n", response.sessionId);
     char *enc_buffer = NULL;
@@ -356,8 +347,7 @@ void handle3(int sock, char *buffer, unsigned int buffer_size)
 {
     printf("Handling 3\n");
     MessageType3 *msg = (MessageType3*)sym_decrypt(buffer, buffer_size,
-                                                   sizeof(MessageType3),
-                                                   "");
+                                                   sizeof(MessageType3));
 
     if (msg->sidLength != SID_LENGTH || msg->sessionId[SID_LENGTH] != 0) {
         send_error(sock, "Invalid session id.");
@@ -366,8 +356,8 @@ void handle3(int sock, char *buffer, unsigned int buffer_size)
         printf("Session id: %s\n", msg->sessionId);
         printf("Path: %s\n", msg->pathName);
 
-        char *username = (char*)getElement(sessions, msg->sessionId);
-
+        //TODO: Assert that the session ID matches and userID matches
+        char *username = global_session.username;
         printf("User: %s\n", username);
         if (check_acl_access(msg->pathName, username) == 1) {
             file_transfer(sock, msg->sessionId, msg->pathName);
@@ -409,9 +399,6 @@ int expect_ack(int sock, char const *session_id)
 
 
     if (!msg_ok(TYPE6, bytes_read, buffer, sock)) {
-        //printf("!!!!173!!!!\n");
-        freeHashMap(sessions, free);
-        sessions = initHashMap(20, NULL);
         return 0;
     }
 
@@ -549,7 +536,7 @@ int msg_ok(char expect,int bytes_read,void * buffer, int sock)
                     send_error(sock, "Malformed Message: sid/path length does not match");
                     return 0;
                     //check if sid is valid
-                } else if(getElement(sessions, msg->sessionId) == NULL) {
+                } else if(strcmp(global_session.session_id, msg->sessionId) != 0) {
                     send_error(sock, "T3: Invalid session id");
                 }
             }
@@ -570,9 +557,10 @@ int msg_ok(char expect,int bytes_read,void * buffer, int sock)
                     send_error(sock, "Malformed Message: sid length does not match");
                     return 0;
                     //check if sid is valid
-                } else if(getElement(sessions, msg->sessionId) == NULL) {
+                } else if(strcmp(global_session.session_id, msg->sessionId) != 0) {
                     send_error(sock, "T6: Invalid session id");
                 }
+
                 //test
             }
             break;
@@ -611,8 +599,7 @@ void server_loop(int sock)
             case TYPE3:
                 handle3(sock, (char*)buffer, bytes_read);
                 expect = TYPE0;
-                freeHashMap(sessions, free);
-                sessions = initHashMap(20, NULL);
+                //TODO: END THE SESSION
                 break;
             default:
                 break;
@@ -650,9 +637,6 @@ int main(int argc, char *argv[])
     clock_gettime(CLOCK_MONOTONIC, &ts);
     srandom((unsigned int)ts.tv_nsec);
 
-    // Initialize sessions hashmap
-    sessions = initHashMap(20, NULL);
-
     // Create a nn_socket
     int sock = nn_socket(AF_SP, NN_PAIR);
     if (sock < 0)
@@ -665,8 +649,6 @@ int main(int argc, char *argv[])
 
     // Clean up after ourselves
     nn_shutdown(sock, 0);
-
-    freeHashMap(sessions, free);
 
     return 0;
 }
