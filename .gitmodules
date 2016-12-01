@@ -1,3 +1,0 @@
-[submodule "jlibc"]
-	path = jlibc
-	url = https://github.com/jpypi/jlibc
