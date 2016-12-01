@@ -15,15 +15,15 @@
 
 #include <nanomsg/nn.h>
 #include <nanomsg/pair.h>
+#include "cryptlib.h"
 
 #include "apue.h"
 #include "message.h"
 #include "acl.h"
 #include "util.h"
+#include "encryption.h"
 
-#include "cryptlib.h"
-
-// This is used so that functions can be ordered more logically
+// So functions can be ordered more freely/logically
 #include "sgetd.h"
 
 #define initmsgtype(N) {.header.messageType = N,\
@@ -32,14 +32,6 @@
                         .header.messageLength = sizeof(MessageType ## N),\
                         .sidLength=SID_LENGTH}
 #define sendtype(N, sock, obj) nn_send(sock, obj, sizeof(MessageType ## N), 0)
-#define ccall(func, ...) ret = func(__VA_ARGS__);\
-                         checkCryptNormal(ret, #func, __LINE__)
-
-#define SYMMETRIC_ALG CRYPT_ALGO_BLOWFISH
-
-
-static char GPG_SEC[] = "/.gnupg/secring.gpg";
-static char GPG_PUB[] = "/.gnupg/pubring.gpg";
 
 
 struct Session {
@@ -49,222 +41,6 @@ struct Session {
 };
 
 struct Session global_session;
-
-
-/*
- * Error handler wrapper for cryptlib functions. Borrowed from gpgEncDec.c
- * example.
- */
-void checkCryptNormal(int returnCode, char *routineName, int line){
-    if (cryptStatusError(returnCode)){
-        printf("Error in %s at line %d, return value %d\n",
-               routineName, line, returnCode);
-        exit(returnCode);
-    }
-}
-
-
-/*
- * Abstraction around opening cryptlib keysets from a given file
- */
-void open_keyset(char *file, CRYPT_KEYSET *keyset) {
-    struct passwd *user_info = getpwuid(getuid());
-    char *keyring_file = malloc(strlen(user_info->pw_dir) + strlen(file) + 1);
-    strcpy(keyring_file, user_info->pw_dir);
-    strcat(keyring_file, file);
-    printf("Reading keyring from: <%s>\n", keyring_file);
-
-    int ret = cryptKeysetOpen(keyset, CRYPT_UNUSED, CRYPT_KEYSET_FILE,
-                              keyring_file, CRYPT_KEYOPT_READONLY);
-    checkCryptNormal(ret,"cryptKeysetOpen",__LINE__);
-
-    free(keyring_file);
-}
-
-
-/*
- * Decrypts the initial request sent from the client. (via pub key crypto)
- * Returns: pointer to decrypted data
- */
-char * pgp_decrypt(char *enc_buffer, int data_size, int expect_size) {
-    int ret = 0;
-    int bytes_copied = 0;
-    CRYPT_KEYSET keyset;
-    CRYPT_ENVELOPE data_envelope;
-
-    // Open the keyset
-    open_keyset(GPG_SEC, &keyset);
-
-    // Create envelope
-    ret = cryptCreateEnvelope(&data_envelope, CRYPT_UNUSED, CRYPT_FORMAT_AUTO);
-    checkCryptNormal(ret,"cryptCreateEnvelope",__LINE__);
-
-    // Set the keyset for the envelope
-    ret = cryptSetAttribute(data_envelope, CRYPT_ENVINFO_KEYSET_DECRYPT, keyset);
-    checkCryptNormal(ret,"cryptSetAttribute",__LINE__);
-
-    // Put data in the envelope
-    cryptPushData(data_envelope, enc_buffer, data_size, &bytes_copied);
-    int req_attrib = 0;
-    ret = cryptGetAttribute(data_envelope, CRYPT_ATTRIBUTE_CURRENT, &req_attrib);
-    if (req_attrib != CRYPT_ENVINFO_PRIVATEKEY)
-        err_quit("Decrypt error");
-
-    // TODO: Put the actual passphrase here for testing
-    // TODO: DON'T LEAVE THIS HERE FOR PRODUCTION
-    ret = cryptSetAttributeString(data_envelope, CRYPT_ENVINFO_PASSWORD,
-                                  "secret", 6);
-    if (ret != CRYPT_OK) {
-        if (ret == CRYPT_ERROR_WRONGKEY)
-            err_quit("Wrong key");
-        else
-            err_quit("cryptSetAttributeString line %d returned <%d>\n",
-                     __LINE__, ret);
-    }
-
-    ret = cryptFlushData(data_envelope);
-    checkCryptNormal(ret, "cryptFlushData", __LINE__);
-
-    char *cleartext = malloc(expect_size);
-
-    // Pull out the clear text
-    cryptPopData(data_envelope, cleartext, expect_size, &bytes_copied);
-    printf("Decrypted size: %d\n", bytes_copied);
-
-    // Time to wrap up
-    cryptDestroyEnvelope(data_envelope);
-    cryptKeysetClose(keyset);
-
-    return cleartext;
-}
-
-
-/*
- * Does pubkey encryption used for the initial respons to the client.
- * Returns: length of encrypted data
- */
-int pgp_encrypt(char *buffer, unsigned int size, char **enc_data) {
-    int ret = 0;
-    int bytes_copied = 0;
-    CRYPT_KEYSET keyset;
-    CRYPT_ENVELOPE data_envelope;
-    // TODO: This is fine for testing, but needs to be fixed for prod
-    char *recipient = "vagrant";
-    unsigned int recipient_len = strlen(recipient);
-
-    // Open the keyset
-    open_keyset(GPG_PUB, &keyset);
-
-    // Create an envelope
-    ccall(cryptCreateEnvelope, &data_envelope, CRYPT_UNUSED, CRYPT_FORMAT_PGP);
-
-    // Set the keyset for the envelope
-    ccall(cryptSetAttribute, data_envelope, CRYPT_ENVINFO_KEYSET_ENCRYPT, keyset);
-
-    // Pick the pub key to use
-    ret = cryptSetAttributeString(data_envelope, CRYPT_ENVINFO_RECIPIENT,
-                                  recipient, recipient_len);
-    checkCryptNormal(ret, "cryptSetAttributeString", __LINE__);
-
-    // Set envelope data size and push data
-    ret = cryptSetAttribute(data_envelope, CRYPT_ENVINFO_DATASIZE, size);
-    ccall(cryptPushData, data_envelope, buffer, size, &bytes_copied);
-
-    // Flush the data
-    ccall(cryptFlushData, data_envelope);
-
-    int enc_size = size+291+1024;
-    *enc_data = malloc(enc_size);
-    if (*enc_data == NULL)
-        err_sys("malloc error line %d", __LINE__);
-
-    ccall(cryptPopData, data_envelope, *enc_data, enc_size, &bytes_copied);
-    ccall(cryptDestroyEnvelope, data_envelope);
-    ccall(cryptKeysetClose, keyset);
-
-    return bytes_copied;
-}
-
-
-/*
- * Returns: size of encrypted data
- */
-int sym_encrypt(char *data, int size, char **enc_data) {
-    int ret = 0;
-    int bytes_copied = 0;
-    CRYPT_ENVELOPE data_envelope;
-    CRYPT_CONTEXT symmetric_context;
-
-    // Create an envelope
-    ret = cryptCreateEnvelope(&data_envelope, CRYPT_UNUSED,
-                              CRYPT_FORMAT_CRYPTLIB);
-    checkCryptNormal(ret, "cryptCreateEnvelope", __LINE__);
-
-    // Initialize symmetric encryption context
-    ccall(cryptCreateContext, &symmetric_context, CRYPT_UNUSED, SYMMETRIC_ALG);
-
-    // Load the session encryption key into the context
-    ccall(cryptSetAttributeString, symmetric_context, CRYPT_CTXINFO_KEY,
-            global_session.session_key, SYM_KEY_LENGTH);
-
-    // Load the context to the envelope
-    ccall(cryptSetAttribute, data_envelope, CRYPT_ENVINFO_SESSIONKEY,
-            symmetric_context);
-
-    // Destroy the context
-    ccall(cryptDestroyContext, symmetric_context);
-
-    // Prep and push the data in to the envelope
-    ccall(cryptSetAttribute, data_envelope, CRYPT_ENVINFO_DATASIZE, size);
-
-    ccall(cryptPushData, data_envelope, data, size, &bytes_copied);
-    ccall(cryptFlushData, data_envelope);
-
-    // Make space for the encrypted data and pop it out
-    unsigned int enc_size = size + 2048;
-    *enc_data = malloc(enc_size);
-    if (*enc_data == NULL)
-        err_sys("malloc error line %d", __LINE__);
-
-    ccall(cryptPopData, data_envelope, *enc_data, enc_size, &bytes_copied);
-
-    // Destroy the envelope
-    ccall(cryptDestroyEnvelope, data_envelope);
-
-    return bytes_copied;
-}
-
-
-/*
- * Used for decrypting session messages
- */
-char * sym_decrypt(char *enc_buffer, int data_size, int expect_size)
-{
-    int ret = 0;
-    int bytes_copied = 0;
-    CRYPT_ENVELOPE data_envelope;
-    CRYPT_CONTEXT sym_context;
-
-    ccall(cryptCreateEnvelope, &data_envelope, CRYPT_UNUSED, CRYPT_FORMAT_AUTO);
-
-    cryptPushData( data_envelope, enc_buffer, data_size, &bytes_copied);
-
-    ccall(cryptCreateContext, &sym_context, CRYPT_UNUSED, SYMMETRIC_ALG);
-
-    ccall(cryptSetAttributeString, sym_context, CRYPT_CTXINFO_KEY,
-            global_session.session_key, SYM_KEY_LENGTH);
-    ccall(cryptSetAttribute, data_envelope, CRYPT_ENVINFO_SESSIONKEY, sym_context);
-
-    ccall(cryptDestroyContext, sym_context);
-    cryptFlushData(data_envelope);
-
-    char *cleartext = malloc(expect_size);
-    ccall(cryptPopData, data_envelope, cleartext, expect_size, &bytes_copied);
-
-    ccall(cryptDestroyEnvelope, data_envelope);
-
-    return cleartext;
-}
 
 
 /* TYPE 0
@@ -327,16 +103,30 @@ void establish_session(int sock, char const *username)
  *
  * Returns: Results of nn_send
  */
-int send_error(int sock, char *error_text)
+int send_error(int sock, char *error_text, int phase)
 {
-    printf("Sending Type 2 Message: %s\n", error_text);
+    printf("Sending Type 2 Message (phase: %d): %s\n", phase, error_text);
 
     MessageType2 err_msg = initmsgtype(2);
     err_msg.msgLength = strnlen(error_text, MAX_ERROR_MESSAGE);
     strncpy(err_msg.errorMessage, error_text, MAX_ERROR_MESSAGE);
     err_msg.errorMessage[MAX_ERROR_MESSAGE] = 0;
 
-    return sendtype(2, sock, &err_msg);
+    char *enc_buffer = NULL;
+    int length = 0;
+
+    if (phase == 1) {
+        length = pgp_encrypt((char*)&err_msg, sizeof(err_msg), &enc_buffer);
+    } else if (phase == 2) {
+        length = sym_encrypt((char*)&err_msg, sizeof(err_msg),
+                             &enc_buffer, global_session.session_key);
+    }
+
+    int res = nn_send(sock, enc_buffer, length, 0);
+
+    free(enc_buffer);
+
+    return res;
 }
 
 
@@ -347,10 +137,11 @@ void handle3(int sock, char *buffer, unsigned int buffer_size)
 {
     printf("Handling 3\n");
     MessageType3 *msg = (MessageType3*)sym_decrypt(buffer, buffer_size,
-                                                   sizeof(MessageType3));
+                                                   sizeof(MessageType3),
+                                                   global_session.session_key);
 
     if (msg->sidLength != SID_LENGTH || msg->sessionId[SID_LENGTH] != 0) {
-        send_error(sock, "Invalid session id.");
+        send_error(sock, "Invalid session id.", 2);
         return;
     } else {
         printf("Session id: %s\n", msg->sessionId);
@@ -362,7 +153,7 @@ void handle3(int sock, char *buffer, unsigned int buffer_size)
         if (check_acl_access(msg->pathName, username) == 1) {
             file_transfer(sock, msg->sessionId, msg->pathName);
         } else {
-            send_error(sock, "Access to file denied.");
+            send_error(sock, "Access to file denied.", 2);
         }
     }
 }
@@ -373,9 +164,16 @@ void handle3(int sock, char *buffer, unsigned int buffer_size)
  */
 void end_session(int sock, char const *session_id)
 {
+    char *enc_buffer = NULL;
+    int length = 0;
+
     MessageType5 response = initsidtype(5);
     safe_sid_copy(response.sessionId, session_id);
-    sendtype(5, sock, &response);
+
+    length = sym_encrypt((char*)&response, sizeof(response),
+                         &enc_buffer, global_session.session_key);
+
+    nn_send(sock, enc_buffer, length, 0);
 }
 
 
@@ -397,12 +195,18 @@ int expect_ack(int sock, char const *session_id)
     //    return 0;
     //}
 
+    char *decrypted_data = sym_decrypt(buffer, bytes_read,
+                                       MAX_BUFFER_SIZE,
+                                       global_session.session_key);
 
-    if (!msg_ok(TYPE6, bytes_read, buffer, sock)) {
+    if (!msg_ok(TYPE6, bytes_read, decrypted_data, sock)) {
         return 0;
     }
 
-    printf("Ack sid: %s\n", ((MessageType6*)buffer)->sessionId);
+    printf("Ack sid: %s\n", ((MessageType6*)decrypted_data)->sessionId);
+
+    free(decrypted_data);
+
     return 1;
 }
 
@@ -412,8 +216,12 @@ int expect_ack(int sock, char const *session_id)
  */
 void file_transfer(int sock, char *session_id, char *path)
 {
+    printf("beginning file transfer\n");
     MessageType4 response = initsidtype(4);
     safe_sid_copy(response.sessionId, session_id);
+
+    char *enc_buffer = NULL;
+    int length = 0;
 
     FILE *src_file = fopen(path, "r");
 
@@ -429,7 +237,13 @@ void file_transfer(int sock, char *session_id, char *path)
             break;
         }
 
-        sendtype(4, sock, &response);
+        length = sym_encrypt((char*)&response, sizeof(response),
+                             &enc_buffer, global_session.session_key);
+
+        nn_send(sock, enc_buffer, length, 0);
+
+        free(enc_buffer);
+
         if (expect_ack(sock, session_id) == 0) {
             return;
         }
@@ -456,7 +270,7 @@ int msg_ok(char expect,int bytes_read,void * buffer, int sock)
         err_quit("Error: %s", nn_strerror(errno));
         //check that at least a full header was read
     } else if (bytes_read <= sizeof(Header)) {
-        send_error(sock, "Invalid message length: could not read header");
+        send_error(sock, "Invalid message length: could not read header", 2);
         return 0;
     } else {
         msg_header = (Header*)buffer;
@@ -467,13 +281,13 @@ int msg_ok(char expect,int bytes_read,void * buffer, int sock)
     }
         //check actual message size against reported
     if (bytes_read != msg_header->messageLength) {
-        send_error(sock, "Malformed message header");
+        send_error(sock, "Malformed message header", 2);
         return 0;
     }
         //check expected message type against reported
     if (expect != msg_header->messageType) {
         if (msg_header->messageType != TYPE2) {
-            send_error(sock, "unexpected message type received");
+            send_error(sock, "unexpected message type received", 2);
             return 0;
         }
     }
@@ -482,17 +296,17 @@ int msg_ok(char expect,int bytes_read,void * buffer, int sock)
         case TYPE0:
                 //check actual message size against correct message size
             if (sizeof(MessageType0) != bytes_read) {
-                send_error(sock, "Malformed Message: invalid message length for TYPE0");
+                send_error(sock, "Malformed Message: invalid message length for TYPE0", 2);
                 return 0;
             } else {
                 MessageType0 *msg = (MessageType0*)buffer;
                     //check reported distinguishes name length within bounds
                 if (msg->dnLength <= 0 || msg->dnLength > DN_LENGTH) {
-                    send_error(sock, "Malformed Message: invalid distinguished name length");
+                    send_error(sock, "Malformed Message: invalid distinguished name length", 2);
                     return 0;
                     //check reported distinguished name length against actual distinguished name length
                 } else if(msg->dnLength != strnlen(msg->distinguishedName, DN_LENGTH+1)) {
-                    send_error(sock, "Malformed Message: distinguished name length does not match");
+                    send_error(sock, "Malformed Message: distinguished name length does not match", 2);
                     return 0;
                 }
             }
@@ -500,17 +314,17 @@ int msg_ok(char expect,int bytes_read,void * buffer, int sock)
         case TYPE2:
                 //check actual message size against correct message size
             if (sizeof(MessageType2) != bytes_read) {
-                send_error(sock, "Malformed Message: invalid message length for TYPE2");
+                send_error(sock, "Malformed Message: invalid message length for TYPE2", 2);
                 return 0;
             } else {
                 MessageType2 *msg = (MessageType2*)buffer;
                     //check reported error message length within bounds
                 if (msg->msgLength <= 0 || msg->msgLength > MAX_ERROR_MESSAGE) {
-                    send_error(sock, "Malformed Message: invalid error message length");
+                    send_error(sock, "Malformed Message: invalid error message length", 2);
                     return 0;
                     //check reported error message length against actual error message length
                 } else if(msg->msgLength != strnlen(msg->errorMessage, MAX_ERROR_MESSAGE+1)) {
-                    send_error(sock, "Malformed Message: error message length does not match");
+                    send_error(sock, "Malformed Message: error message length does not match", 2);
                     return 0;
                 } else { //print error message
                     printf("Received type 2 message:%s\n", msg->errorMessage);
@@ -521,51 +335,51 @@ int msg_ok(char expect,int bytes_read,void * buffer, int sock)
         case TYPE3:
                 //check actual message size against correct message size
             if (sizeof(MessageType3) != bytes_read) {
-                send_error(sock, "Malformed Message: invalid message length for TYPE3");
+                send_error(sock, "Malformed Message: invalid message length for TYPE3", 2);
                 return 0;
             } else {
                 MessageType3 *msg = (MessageType3*)buffer;
                     //check reported sid length and path length within bounds
                 if (msg->sidLength <= 0 || msg->sidLength > SID_LENGTH ||
                       msg->pathLength <= 0 || msg->pathLength > PATH_MAX) {
-                    send_error(sock, "Malformed Message: invalid sid/path length");
+                    send_error(sock, "Malformed Message: invalid sid/path length", 2);
                     return 0;
                     //check reported sid and path length against actual sid and path length
                 } else if(msg->sidLength != strnlen(msg->sessionId, SID_LENGTH+1) ||
                             msg->pathLength != strnlen(msg->pathName, PATH_MAX+1)) {
-                    send_error(sock, "Malformed Message: sid/path length does not match");
+                    send_error(sock, "Malformed Message: sid/path length does not match", 2);
                     return 0;
                     //check if sid is valid
                 } else if(strcmp(global_session.session_id, msg->sessionId) != 0) {
-                    send_error(sock, "T3: Invalid session id");
+                    send_error(sock, "T3: Invalid session id", 2);
                 }
             }
             break;
         case TYPE6:
                 //check actual message size against correct message size
             if (sizeof(MessageType6) != bytes_read) {
-                send_error(sock, "Malformed Message: invalid message length for TYPE6");
+                send_error(sock, "Malformed Message: invalid message length for TYPE6", 2);
                 return 0;
             } else {
                 MessageType6 *msg = (MessageType6*)buffer;
                     //check reported sid length within bounds
                 if (msg->sidLength <= 0 || msg->sidLength > SID_LENGTH) {
-                    send_error(sock, "Malformed Message: invalid sid length");
+                    send_error(sock, "Malformed Message: invalid sid length", 2);
                     return 0;
                     //check reported sid length against actual sid length
                 } else if(msg->sidLength != strnlen(msg->sessionId, SID_LENGTH+1)) {
-                    send_error(sock, "Malformed Message: sid length does not match");
+                    send_error(sock, "Malformed Message: sid length does not match", 2);
                     return 0;
                     //check if sid is valid
                 } else if(strcmp(global_session.session_id, msg->sessionId) != 0) {
-                    send_error(sock, "T6: Invalid session id");
+                    send_error(sock, "T6: Invalid session id", 2);
                 }
 
                 //test
             }
             break;
         default: //should never be reached, but just in case
-            send_error(sock, "Unexpected Message Type");
+            send_error(sock, "Unexpected Message Type", 2);
             return 0;
             break;
     }
