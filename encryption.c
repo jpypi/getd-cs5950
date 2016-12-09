@@ -175,7 +175,8 @@ char * pgp_decrypt(char *enc_buffer, int data_size, int expect_size,
 
     // Put data in the envelope
     ret = cryptPushData(data_envelope, enc_buffer, data_size, &bytes_copied);
-    printf("ret = %d\n", ret);
+    if (ret != -50)
+        err_quit("Error trying to push data into the envelope in pgp_decrypt");
 
     int req_attrib = 0;
     ret = cryptGetAttribute(data_envelope, CRYPT_ATTRIBUTE_CURRENT, &req_attrib);
@@ -212,7 +213,7 @@ char * pgp_decrypt(char *enc_buffer, int data_size, int expect_size,
     char *cleartext = malloc(expect_size);
 
     // Pull out the clear text
-    cryptPopData(data_envelope, cleartext, expect_size, bytes_decrypted);
+    ccall(cryptPopData, data_envelope, cleartext, expect_size, bytes_decrypted);
     printf("Decrypted size: %d\n", *bytes_decrypted);
 
     // Time to wrap up
@@ -285,7 +286,9 @@ char * sym_decrypt(char *enc_buffer, int data_size, int expect_size, char *key,
 
     ccall(cryptCreateEnvelope, &data_envelope, CRYPT_UNUSED, CRYPT_FORMAT_AUTO);
 
-    cryptPushData(data_envelope, enc_buffer, data_size, &bytes_copied);
+    ret = cryptPushData(data_envelope, enc_buffer, data_size, &bytes_copied);
+    if (ret != -50)
+        err_quit("Error trying to push data into the envelope in sym_decrypt");
 
     ccall(cryptCreateContext, &sym_context, CRYPT_UNUSED, SYMMETRIC_ALG);
 
