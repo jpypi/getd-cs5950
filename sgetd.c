@@ -49,11 +49,12 @@ struct Session global_session;
  */
 int handle0(int sock, char *buffer, unsigned int buffer_size)
 {
-    int decrypted_size = 0;
+    int decrypted_size = 0, errors = 0;
 
     MessageType0 *msg = (MessageType0*)pgp_decrypt(buffer, buffer_size,
                                                    sizeof(MessageType0),
-                                                   &decrypted_size);
+                                                   &decrypted_size,
+                                                   &errors);
 
     if (!msg_ok(TYPE0, decrypted_size, msg, sock, 1)) {
         printf("WELL THAT WAS EXPECTED\n");
@@ -147,11 +148,12 @@ int send_error(int sock, char *error_text, int phase)
 void handle3(int sock, char *buffer, unsigned int buffer_size)
 {
     printf("Handling 3\n");
-    int bytes_decrypted = 0;
+    int bytes_decrypted = 0, errors = 0;
     MessageType3 *msg = (MessageType3*)sym_decrypt(buffer, buffer_size,
                                                    sizeof(MessageType3),
                                                    global_session.session_key,
-                                                   &bytes_decrypted);
+                                                   &bytes_decrypted,
+                                                   &errors);
 
     // NOTE TO ANDREW: Does this stuff just happen in msg_ok though?
     if (msg->sidLength != SID_LENGTH || msg->sessionId[SID_LENGTH] != 0) {
@@ -209,11 +211,12 @@ int expect_ack(int sock, char const *session_id)
     //    return 0;
     //}
 
-    int decrypted_size = 0;
+    int decrypted_size = 0, errors = 0;
     char *decrypted_data = sym_decrypt(buffer, bytes_read,
                                        MAX_BUFFER_SIZE,
                                        global_session.session_key,
-                                       &decrypted_size);
+                                       &decrypted_size,
+                                       &errors);
 
     if (!msg_ok(TYPE6, decrypted_size, decrypted_data, sock, 2))
         return 0;

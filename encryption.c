@@ -105,7 +105,8 @@ int pgp_encrypt(char *buffer, unsigned int size, char **enc_data) {
     int bytes_copied = 0;
     CRYPT_KEYSET keyset;
     CRYPT_ENVELOPE data_envelope;
-    // TODO: This is fine for testing, but needs to be fixed for prod
+
+    // This is fine for testing, but needs to be fixed for prod
     //char *recipient = "vagrant";
     char *recipient = calloc(sizeof(char), 129);
     ret = getlogin_r(recipient, 128);
@@ -155,7 +156,7 @@ int pgp_encrypt(char *buffer, unsigned int size, char **enc_data) {
  * Returns: pointer to decrypted data
  */
 char * pgp_decrypt(char *enc_buffer, int data_size, int expect_size,
-                   int *bytes_decrypted) {
+                   int *bytes_decrypted, int *errors) {
     int ret = 0;
     int bytes_copied = 0;
     CRYPT_KEYSET keyset;
@@ -173,11 +174,15 @@ char * pgp_decrypt(char *enc_buffer, int data_size, int expect_size,
     checkCryptNormal(ret,"cryptSetAttribute",__LINE__);
 
     // Put data in the envelope
-    cryptPushData(data_envelope, enc_buffer, data_size, &bytes_copied);
+    ret = cryptPushData(data_envelope, enc_buffer, data_size, &bytes_copied);
+    printf("ret = %d\n", ret);
+
     int req_attrib = 0;
     ret = cryptGetAttribute(data_envelope, CRYPT_ATTRIBUTE_CURRENT, &req_attrib);
-    if (req_attrib != CRYPT_ENVINFO_PRIVATEKEY)
-        err_quit("Decrypt error");
+    if (req_attrib != CRYPT_ENVINFO_PRIVATEKEY) {
+        *errors = ret;
+        return NULL;
+    }
 
     // TODO: Put the actual passphrase here for testing
     // TODO: DON'T LEAVE THIS HERE FOR PRODUCTION
@@ -271,7 +276,7 @@ int sym_encrypt(char *buffer, unsigned int size, char **enc_data, char *key) {
  * Used for decrypting session messages
  */
 char * sym_decrypt(char *enc_buffer, int data_size, int expect_size, char *key,
-                   int *bytes_decrypted)
+                   int *bytes_decrypted, int *errors)
 {
     int ret = 0;
     int bytes_copied = 0;
@@ -286,15 +291,19 @@ char * sym_decrypt(char *enc_buffer, int data_size, int expect_size, char *key,
 
     ccall(cryptSetAttributeString, sym_context, CRYPT_CTXINFO_KEY,
           key, SYM_KEY_LENGTH);
-    ccall(cryptSetAttribute, data_envelope, CRYPT_ENVINFO_SESSIONKEY, sym_context);
+
+    ret = cryptSetAttribute(data_envelope, CRYPT_ENVINFO_SESSIONKEY, sym_context);
+    if (ret < 0) {
+        *errors = ret;
+        return NULL;
+    }
 
     ccall(cryptDestroyContext, sym_context);
-    ret = cryptFlushData(data_envelope);
-    printf("Sym decrypt flush returend: %d\n", ret);
+    ccall(cryptFlushData, data_envelope);
 
     char *cleartext = malloc(expect_size);
     ccall(cryptPopData, data_envelope, cleartext, expect_size, bytes_decrypted);
-    printf("Decrypted size: %d\n", *bytes_decrypted);
+    printf("sym decrypt size: %d\n", *bytes_decrypted);
 
     ccall(cryptDestroyEnvelope, data_envelope);
 
