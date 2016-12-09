@@ -55,7 +55,7 @@ int handle0(int sock, char *buffer, unsigned int buffer_size)
 
     *decrypted_size = buffer_size; //TODO get real number from pgp_decrypt
 
-    if (!msg_ok(TYPE0, *decrypted_size, msg, sock)) {
+    if (!msg_ok(TYPE0, *decrypted_size, msg, sock, 1)) {
         printf("WELL THAT WAS EXPECTED\n");
         return -1;
     }
@@ -209,7 +209,7 @@ int expect_ack(int sock, char const *session_id)
                                        MAX_BUFFER_SIZE,
                                        global_session.session_key);
 
-    if (!msg_ok(TYPE6, bytes_read, decrypted_data, sock)) {
+    if (!msg_ok(TYPE6, bytes_read, decrypted_data, sock, 2)) {
         return 0;
     }
 
@@ -269,7 +269,7 @@ void file_transfer(int sock, char *session_id, char *path)
  * Should flag any non-conformant message
  * Does not verify contents of strings
  */
-int msg_ok(char expect,int bytes_read,void * buffer, int sock)
+int msg_ok(char expect,int bytes_read,void * buffer, int sock, int phase)
 {
     //printf("bufaddr: %p\n", buffer);
 
@@ -280,7 +280,7 @@ int msg_ok(char expect,int bytes_read,void * buffer, int sock)
         err_quit("Error: %s", nn_strerror(errno));
         //check that at least a full header was read
     } else if (bytes_read <= sizeof(Header)) {
-        send_error(sock, "Invalid message length: could not read header", 2);
+        send_error(sock, "Invalid message length: could not read header", phase);
         return 0;
     } else {
         msg_header = (Header*)buffer;
@@ -297,13 +297,13 @@ int msg_ok(char expect,int bytes_read,void * buffer, int sock)
 /*******************************************************/
         //check actual message size against reported
     if (bytes_read != msg_header->messageLength) {
-        send_error(sock, "Malformed message header", 2);
+        send_error(sock, "Malformed message header", phase);
         return 0;
     }
         //check expected message type against reported
     if (expect != msg_header->messageType) {
         if (msg_header->messageType != TYPE2) {
-            send_error(sock, "unexpected message type received", 2);
+            send_error(sock, "unexpected message type received", phase);
             return 0;
         }
     }
@@ -312,17 +312,17 @@ int msg_ok(char expect,int bytes_read,void * buffer, int sock)
         case TYPE0:
                 //check actual message size against correct message size
             if (sizeof(MessageType0) != bytes_read) {
-                send_error(sock, "Malformed Message: invalid message length for TYPE0", 2);
+                send_error(sock, "Malformed Message: invalid message length for TYPE0", phase);
                 return 0;
             } else {
                 MessageType0 *msg = (MessageType0*)buffer;
                     //check reported distinguishes name length within bounds
                 if (msg->dnLength <= 0 || msg->dnLength > DN_LENGTH) {
-                    send_error(sock, "Malformed Message: invalid distinguished name length", 2);
+                    send_error(sock, "Malformed Message: invalid distinguished name length", phase);
                     return 0;
                     //check reported distinguished name length against actual distinguished name length
                 } else if(msg->dnLength != strnlen(msg->distinguishedName, DN_LENGTH+1)) {
-                    send_error(sock, "Malformed Message: distinguished name length does not match", 2);
+                    send_error(sock, "Malformed Message: distinguished name length does not match", phase);
                     return 0;
                 }
             }
@@ -330,17 +330,17 @@ int msg_ok(char expect,int bytes_read,void * buffer, int sock)
         case TYPE2:
                 //check actual message size against correct message size
             if (sizeof(MessageType2) != bytes_read) {
-                send_error(sock, "Malformed Message: invalid message length for TYPE2", 2);
+                send_error(sock, "Malformed Message: invalid message length for TYPE2", phase);
                 return 0;
             } else {
                 MessageType2 *msg = (MessageType2*)buffer;
                     //check reported error message length within bounds
                 if (msg->msgLength <= 0 || msg->msgLength > MAX_ERROR_MESSAGE) {
-                    send_error(sock, "Malformed Message: invalid error message length", 2);
+                    send_error(sock, "Malformed Message: invalid error message length", phase);
                     return 0;
                     //check reported error message length against actual error message length
                 } else if(msg->msgLength != strnlen(msg->errorMessage, MAX_ERROR_MESSAGE+1)) {
-                    send_error(sock, "Malformed Message: error message length does not match", 2);
+                    send_error(sock, "Malformed Message: error message length does not match", phase);
                     return 0;
                 } else { //print error message
                     printf("Received type 2 message:%s\n", msg->errorMessage);
@@ -351,51 +351,51 @@ int msg_ok(char expect,int bytes_read,void * buffer, int sock)
         case TYPE3:
                 //check actual message size against correct message size
             if (sizeof(MessageType3) != bytes_read) {
-                send_error(sock, "Malformed Message: invalid message length for TYPE3", 2);
+                send_error(sock, "Malformed Message: invalid message length for TYPE3", phase);
                 return 0;
             } else {
                 MessageType3 *msg = (MessageType3*)buffer;
                     //check reported sid length and path length within bounds
                 if (msg->sidLength <= 0 || msg->sidLength > SID_LENGTH ||
                       msg->pathLength <= 0 || msg->pathLength > PATH_MAX) {
-                    send_error(sock, "Malformed Message: invalid sid/path length", 2);
+                    send_error(sock, "Malformed Message: invalid sid/path length", phase);
                     return 0;
                     //check reported sid and path length against actual sid and path length
                 } else if(msg->sidLength != strnlen(msg->sessionId, SID_LENGTH+1) ||
                             msg->pathLength != strnlen(msg->pathName, PATH_MAX+1)) {
-                    send_error(sock, "Malformed Message: sid/path length does not match", 2);
+                    send_error(sock, "Malformed Message: sid/path length does not match", phase);
                     return 0;
                     //check if sid is valid
                 } else if(strcmp(global_session.session_id, msg->sessionId) != 0) {
-                    send_error(sock, "T3: Invalid session id", 2);
+                    send_error(sock, "T3: Invalid session id", phase);
                 }
             }
             break;
         case TYPE6:
                 //check actual message size against correct message size
             if (sizeof(MessageType6) != bytes_read) {
-                send_error(sock, "Malformed Message: invalid message length for TYPE6", 2);
+                send_error(sock, "Malformed Message: invalid message length for TYPE6", phase);
                 return 0;
             } else {
                 MessageType6 *msg = (MessageType6*)buffer;
                     //check reported sid length within bounds
                 if (msg->sidLength <= 0 || msg->sidLength > SID_LENGTH) {
-                    send_error(sock, "Malformed Message: invalid sid length", 2);
+                    send_error(sock, "Malformed Message: invalid sid length", phase);
                     return 0;
                     //check reported sid length against actual sid length
                 } else if(msg->sidLength != strnlen(msg->sessionId, SID_LENGTH+1)) {
-                    send_error(sock, "Malformed Message: sid length does not match", 2);
+                    send_error(sock, "Malformed Message: sid length does not match", phase);
                     return 0;
                     //check if sid is valid
                 } else if(strcmp(global_session.session_id, msg->sessionId) != 0) {
-                    send_error(sock, "T6: Invalid session id", 2);
+                    send_error(sock, "T6: Invalid session id", phase);
                 }
 
                 //test
             }
             break;
         default: //should never be reached, but just in case
-            send_error(sock, "Unexpected Message Type", 2);
+            send_error(sock, "Unexpected Message Type", phase);
             return 0;
             break;
     }

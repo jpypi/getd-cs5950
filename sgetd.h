@@ -10,7 +10,7 @@ void end_session(int sock, char const *session_id);
 int expect_ack(int sock, char const *session_id);
 void handle3(int sock, char *buffer, unsigned int buffer_size);
 void file_transfer(int sock, char *session_id, char *path);
-int msg_ok(char expect, int bytes_read, void * buffer, int sock);
+int msg_ok(char expect, int bytes_read, void * buffer, int sock, int phase);
 void clean_buffer(char *buffer, int size);
 
 

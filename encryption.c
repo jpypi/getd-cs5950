@@ -11,6 +11,7 @@
 #include <termios.h>
 #include <string.h>
 #include "encryption.h"
+#include <unistd.h>
 
 #define SYMMETRIC_ALG CRYPT_ALGO_BLOWFISH
 #define ccall(func, ...) ret = func(__VA_ARGS__);\
@@ -102,7 +103,14 @@ int pgp_encrypt(char *buffer, unsigned int size, char **enc_data) {
     CRYPT_KEYSET keyset;
     CRYPT_ENVELOPE data_envelope;
     // TODO: This is fine for testing, but needs to be fixed for prod
-    char *recipient = "vagrant";
+    //char *recipient = "vagrant";
+    char *recipient = calloc(sizeof(char), 129);
+    ret = getlogin_r(recipient, 128);
+    if (ret < 0) {
+        printf("Could not get server userid");
+        exit(100);
+    }
+    //printf("%s\n", recip);
     unsigned int recipient_len = strlen(recipient);
 
     // Open the keyset
