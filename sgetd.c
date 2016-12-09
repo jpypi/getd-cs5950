@@ -72,7 +72,8 @@ int handle0(int sock, char *buffer, unsigned int buffer_size)
     //buffer[2] += 114;
     /***********************************************************/
     MessageType0 *msg = (MessageType0*)pgp_decrypt(buffer, buffer_size,
-                                                   sizeof(MessageType0),
+                                                   //sizeof(MessageType0),
+                                                   MAX_BUFF_SIZE,
                                                    &decrypted_size,
                                                    &errors);
     //printf("C1000 : %d\n", errors);
