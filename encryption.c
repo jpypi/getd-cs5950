@@ -270,7 +270,8 @@ int sym_encrypt(char *buffer, unsigned int size, char **enc_data, char *key) {
 /*
  * Used for decrypting session messages
  */
-char * sym_decrypt(char *enc_buffer, int data_size, int expect_size, char *key)
+char * sym_decrypt(char *enc_buffer, int data_size, int expect_size, char *key,
+                   int *bytes_decrypted)
 {
     int ret = 0;
     int bytes_copied = 0;
@@ -292,7 +293,8 @@ char * sym_decrypt(char *enc_buffer, int data_size, int expect_size, char *key)
     printf("Sym decrypt flush returend: %d\n", ret);
 
     char *cleartext = malloc(expect_size);
-    ccall(cryptPopData, data_envelope, cleartext, expect_size, &bytes_copied);
+    ccall(cryptPopData, data_envelope, cleartext, expect_size, bytes_decrypted);
+    printf("Decrypted size: %d\n", *bytes_decrypted);
 
     ccall(cryptDestroyEnvelope, data_envelope);
 
