@@ -33,6 +33,7 @@
                         .sidLength=SID_LENGTH}
 #define sendtype(N, sock, obj) nn_send(sock, obj, sizeof(MessageType ## N), 0)
 
+#define ERR_MSG "Reset"
 
 struct Session {
     char username[DN_LENGTH+1];
@@ -46,15 +47,24 @@ struct Session global_session;
 /* TYPE 0
  * A user is requesting to start a session
  */
-void handle0(int sock, char *buffer, unsigned int buffer_size)
+int handle0(int sock, char *buffer, unsigned int buffer_size)
 {
+    int *decrypted_size = malloc(sizeof(int));
     MessageType0 *msg = (MessageType0*)pgp_decrypt(buffer, buffer_size,
                                                    sizeof(MessageType0));
+
+    *decrypted_size = buffer_size; //TODO get real number from pgp_decrypt
+
+    if (!msg_ok(TYPE0, *decrypted_size, msg, sock)) {
+        printf("WELL THAT WAS EXPECTED\n");
+        return -1;
+    }
 
     printf("Requesting User: %s\n", msg->distinguishedName);
     establish_session(sock, msg->distinguishedName);
 
     free(msg);
+    return 0;
 }
 
 
@@ -108,8 +118,8 @@ int send_error(int sock, char *error_text, int phase)
     printf("Sending Type 2 Message (phase: %d): %s\n", phase, error_text);
 
     MessageType2 err_msg = initmsgtype(2);
-    err_msg.msgLength = strnlen(error_text, MAX_ERROR_MESSAGE);
-    strncpy(err_msg.errorMessage, error_text, MAX_ERROR_MESSAGE);
+    err_msg.msgLength = strnlen(ERR_MSG, MAX_ERROR_MESSAGE);
+    strncpy(err_msg.errorMessage, ERR_MSG, MAX_ERROR_MESSAGE);
     err_msg.errorMessage[MAX_ERROR_MESSAGE] = 0;
 
     char *enc_buffer = NULL;
@@ -279,6 +289,12 @@ int msg_ok(char expect,int bytes_read,void * buffer, int sock)
         printf("Message type: %d\n", msg_header->messageType);
         printf("Message size: %d\n", msg_header->messageLength);
     }
+/********************************************************/
+    printf("sizeof(buffer): %d\n", strlen((char*)buffer) );
+    printf("bytes_read: %d\n", bytes_read);
+    printf("msg_header->messageLength: %d\n", msg_header->messageLength);
+    printf("sizeof(MessageType0): %d\n", sizeof(MessageType0));
+/*******************************************************/
         //check actual message size against reported
     if (bytes_read != msg_header->messageLength) {
         send_error(sock, "Malformed message header", 2);
@@ -397,6 +413,7 @@ void server_loop(int sock)
     while(1) {
         //memset(buffer, 0, MAX_BUFFER_SIZE);
         void *buffer = NULL;
+        int ret = 0;
 
         printf("Receiving\n");
         bytes_read = nn_recv(sock, &buffer, NN_MSG, 0);
@@ -407,8 +424,12 @@ void server_loop(int sock)
 
         switch(expect) {
             case TYPE0:
-                handle0(sock, (char*)buffer, bytes_read);
-                expect = TYPE3;
+                ret = handle0(sock, (char*)buffer, bytes_read);
+                if (ret < 0) {
+                    expect = TYPE0;
+                } else {
+                    expect = TYPE3;
+                }
                 break;
             case TYPE3:
                 handle3(sock, (char*)buffer, bytes_read);

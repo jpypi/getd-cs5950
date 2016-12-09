@@ -17,4 +17,6 @@ char * pgp_decrypt(char *enc_buffer, int data_size, int expect_size);
 int sym_encrypt(char *buffer, unsigned int size, char **enc_data, char *key);
 char * sym_decrypt(char *enc_buffer, int data_size, int expect_size, char *key);
 
+int getPassword(char* password, int size);
+
 #endif

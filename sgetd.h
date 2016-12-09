@@ -3,7 +3,7 @@
 
 #define MAX_BUFFER_SIZE 5120
 
-void handle0(int sock, char *buffer, unsigned int buffer_size);
+int handle0(int sock, char *buffer, unsigned int buffer_size);
 void establish_session(int sock, char const *username);
 int send_error(int sock, char *error_text, int phase);
 void end_session(int sock, char const *session_id);

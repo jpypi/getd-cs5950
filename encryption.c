@@ -8,6 +8,10 @@
 #include "apue.h"
 #include "message.h"
 
+#include <termios.h>
+#include <string.h>
+#include "encryption.h"
+
 #define SYMMETRIC_ALG CRYPT_ALGO_BLOWFISH
 #define ccall(func, ...) ret = func(__VA_ARGS__);\
                          checkCryptNormal(ret, #func, __LINE__)
@@ -166,8 +170,17 @@ char * pgp_decrypt(char *enc_buffer, int data_size, int expect_size) {
     // TODO: Put the actual passphrase here for testing
     // TODO: DON'T LEAVE THIS HERE FOR PRODUCTION
     // TODO: Use a prompt for the password
+    char pass[100];
+    int pLen = getPassword(pass, 100);
+    printf("%s : %d\n", pass, pLen);
+
     ret = cryptSetAttributeString(data_envelope, CRYPT_ENVINFO_PASSWORD,
-                                  "secret", 6);
+                                  pass, pLen);
+    int i;
+    for (i = 0; i < pLen; i++) {
+        pass[i] = '\0';
+    }
+
     if (ret != CRYPT_OK) {
         if (ret == CRYPT_ERROR_WRONGKEY)
             err_quit("Wrong key");
@@ -196,7 +209,7 @@ char * pgp_decrypt(char *enc_buffer, int data_size, int expect_size) {
 /*
  * Returns: size of encrypted data
  */
-int sym_encrypt(char *buffer, int size, char **enc_data, char *key) {
+int sym_encrypt(char *buffer, unsigned int size, char **enc_data, char *key) {
     int ret = 0;
     int bytes_copied = 0;
     CRYPT_ENVELOPE data_envelope;
@@ -271,4 +284,40 @@ char * sym_decrypt(char *enc_buffer, int data_size, int expect_size, char *key)
     ccall(cryptDestroyEnvelope, data_envelope);
 
     return cleartext;
+}
+
+/*
+ * Used to read in a pass phrase
+ */
+
+int getPassword(char* password, int size)
+{
+    static struct termios oldt, newt;
+    int i = 0;
+    //int c;
+    printf("Enter private key pass phrase: ");
+    /*saving the old settings of STDIN_FILENO and copy settings for resetting*/
+    tcgetattr( STDIN_FILENO, &oldt);
+    newt = oldt;
+
+    /*setting the approriate bit in the termios struct*/
+    newt.c_lflag &= ~(ECHO);          
+
+    /*setting the new bits*/
+    tcsetattr( STDIN_FILENO, TCSANOW, &newt);
+
+    /*reading the password from the console*/
+    //while ((c = getchar())!= '\n' && c != EOF && i < SIZE){
+    //    password[i++] = c;
+    //}
+    fgets(password, size, stdin);
+    i = strnlen(password, size);
+    password[i-1] = '\0';
+
+    /*resetting our old STDIN_FILENO*/ 
+    tcsetattr( STDIN_FILENO, TCSANOW, &oldt);
+
+    printf("\n");
+
+    return i-1;
 }
