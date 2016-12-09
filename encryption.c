@@ -13,11 +13,14 @@
 #include "message.h"
 #include "encryption.h"
 #include <unistd.h>
-
+#include "sgetd.h"
 
 #define SYMMETRIC_ALG CRYPT_ALGO_BLOWFISH
 #define ccall(func, ...) ret = func(__VA_ARGS__);\
                          checkCryptNormal(ret, #func, __LINE__)
+#define ccall_d(func, ...) ret = func(__VA_ARGS__);\
+                         if (checkCryptNormal(ret, #func, __LINE__)<0){\
+                             *errors = -1; return NULL;}
 
 
 static char GPG_SEC[] = "/.gnupg/secring.gpg";
@@ -69,12 +72,14 @@ char * gen_symmetric_key(unsigned int length) {
  * Error handler wrapper for cryptlib functions. Borrowed from gpgEncDec.c
  * example.
  */
-void checkCryptNormal(int returnCode, char *routineName, int line){
+int checkCryptNormal(int returnCode, char *routineName, int line){
     if (cryptStatusError(returnCode)){
         printf("Error in %s at line %d, return value %d\n",
                routineName, line, returnCode);
-        exit(returnCode);
+        //exit(returnCode);
+        return -1;
     }
+    return 0;
 }
 
 
@@ -301,9 +306,9 @@ char * sym_decrypt(char *enc_buffer, int data_size, int expect_size, char *key,
         //err_quit("Error trying to push data into the envelope in sym_decrypt");
     }
 
-    ccall(cryptCreateContext, &sym_context, CRYPT_UNUSED, SYMMETRIC_ALG);
+    ccall_d(cryptCreateContext, &sym_context, CRYPT_UNUSED, SYMMETRIC_ALG);
 
-    ccall(cryptSetAttributeString, sym_context, CRYPT_CTXINFO_KEY,
+    ccall_d(cryptSetAttributeString, sym_context, CRYPT_CTXINFO_KEY,
           key, SYM_KEY_LENGTH);
 
     ret = cryptSetAttribute(data_envelope, CRYPT_ENVINFO_SESSIONKEY, sym_context);
@@ -312,14 +317,14 @@ char * sym_decrypt(char *enc_buffer, int data_size, int expect_size, char *key,
         return NULL;
     }
 
-    ccall(cryptDestroyContext, sym_context);
-    ccall(cryptFlushData, data_envelope);
+    ccall_d(cryptDestroyContext, sym_context);
+    ccall_d(cryptFlushData, data_envelope);
 
     char *cleartext = malloc(expect_size);
-    ccall(cryptPopData, data_envelope, cleartext, expect_size, bytes_decrypted);
+    ccall_d(cryptPopData, data_envelope, cleartext, expect_size, bytes_decrypted);
     printf("sym decrypt size: %d\n", *bytes_decrypted);
 
-    ccall(cryptDestroyEnvelope, data_envelope);
+    ccall_d(cryptDestroyEnvelope, data_envelope);
 
     return cleartext;
 }

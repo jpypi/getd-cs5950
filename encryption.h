@@ -7,7 +7,7 @@
 
 char * gen_symmetric_key(unsigned int length);
 
-void checkCryptNormal(int returnCode, char *routineName, int line);
+int checkCryptNormal(int returnCode, char *routineName, int line);
 
 void open_keyset(char *file, CRYPT_KEYSET *keyset);
 
