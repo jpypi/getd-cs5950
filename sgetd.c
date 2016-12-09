@@ -85,6 +85,7 @@ void establish_session(int sock, char const *username)
 
     // Save the SID
     safe_sid_copy(response.sessionId, random_id);
+    safe_sid_copy(global_session.session_id, random_id);
 
     // Save the username
     unsigned int un_len = strnlen(username, DN_LENGTH);
