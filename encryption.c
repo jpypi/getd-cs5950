@@ -154,7 +154,8 @@ int pgp_encrypt(char *buffer, unsigned int size, char **enc_data) {
  * Decrypts the initial request sent from the client. (via pub key crypto)
  * Returns: pointer to decrypted data
  */
-char * pgp_decrypt(char *enc_buffer, int data_size, int expect_size) {
+char * pgp_decrypt(char *enc_buffer, int data_size, int expect_size,
+                   int *bytes_decrypted) {
     int ret = 0;
     int bytes_copied = 0;
     CRYPT_KEYSET keyset;
@@ -206,8 +207,8 @@ char * pgp_decrypt(char *enc_buffer, int data_size, int expect_size) {
     char *cleartext = malloc(expect_size);
 
     // Pull out the clear text
-    cryptPopData(data_envelope, cleartext, expect_size, &bytes_copied);
-    printf("Decrypted size: %d\n", bytes_copied);
+    cryptPopData(data_envelope, cleartext, expect_size, bytes_decrypted);
+    printf("Decrypted size: %d\n", *bytes_decrypted);
 
     // Time to wrap up
     cryptDestroyEnvelope(data_envelope);
@@ -278,7 +279,7 @@ char * sym_decrypt(char *enc_buffer, int data_size, int expect_size, char *key)
 
     ccall(cryptCreateEnvelope, &data_envelope, CRYPT_UNUSED, CRYPT_FORMAT_AUTO);
 
-    cryptPushData( data_envelope, enc_buffer, data_size, &bytes_copied);
+    cryptPushData(data_envelope, enc_buffer, data_size, &bytes_copied);
 
     ccall(cryptCreateContext, &sym_context, CRYPT_UNUSED, SYMMETRIC_ALG);
 
@@ -287,7 +288,8 @@ char * sym_decrypt(char *enc_buffer, int data_size, int expect_size, char *key)
     ccall(cryptSetAttribute, data_envelope, CRYPT_ENVINFO_SESSIONKEY, sym_context);
 
     ccall(cryptDestroyContext, sym_context);
-    cryptFlushData(data_envelope);
+    ret = cryptFlushData(data_envelope);
+    printf("Sym decrypt flush returend: %d\n", ret);
 
     char *cleartext = malloc(expect_size);
     ccall(cryptPopData, data_envelope, cleartext, expect_size, &bytes_copied);
@@ -297,10 +299,10 @@ char * sym_decrypt(char *enc_buffer, int data_size, int expect_size, char *key)
     return cleartext;
 }
 
+
 /*
  * Used to read in a pass phrase
  */
-
 int getPassword(char* password, int size)
 {
     static struct termios oldt, newt;
@@ -312,7 +314,7 @@ int getPassword(char* password, int size)
     newt = oldt;
 
     /*setting the approriate bit in the termios struct*/
-    newt.c_lflag &= ~(ECHO);          
+    newt.c_lflag &= ~(ECHO);
 
     /*setting the new bits*/
     tcsetattr( STDIN_FILENO, TCSANOW, &newt);
@@ -325,7 +327,7 @@ int getPassword(char* password, int size)
     i = strnlen(password, size);
     password[i-1] = '\0';
 
-    /*resetting our old STDIN_FILENO*/ 
+    /*resetting our old STDIN_FILENO*/
     tcsetattr( STDIN_FILENO, TCSANOW, &oldt);
 
     printf("\n");

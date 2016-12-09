@@ -49,13 +49,13 @@ struct Session global_session;
  */
 int handle0(int sock, char *buffer, unsigned int buffer_size)
 {
-    int *decrypted_size = malloc(sizeof(int));
+    int decrypted_size = 0;
+
     MessageType0 *msg = (MessageType0*)pgp_decrypt(buffer, buffer_size,
-                                                   sizeof(MessageType0));
+                                                   sizeof(MessageType0),
+                                                   &decrypted_size);
 
-    *decrypted_size = buffer_size; //TODO get real number from pgp_decrypt
-
-    if (!msg_ok(TYPE0, *decrypted_size, msg, sock, 1)) {
+    if (!msg_ok(TYPE0, decrypted_size, msg, sock, 1)) {
         printf("WELL THAT WAS EXPECTED\n");
         return -1;
     }
