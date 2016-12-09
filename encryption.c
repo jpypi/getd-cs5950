@@ -1,21 +1,24 @@
+#define _XOPEN_SOURCE 700
+
 #include <stdlib.h>
 #include <pwd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <termios.h>
+#include <string.h>
 
 #include "cryptlib.h"
 
 #include "apue.h"
 #include "message.h"
-
-#include <termios.h>
-#include <string.h>
 #include "encryption.h"
 #include <unistd.h>
+
 
 #define SYMMETRIC_ALG CRYPT_ALGO_BLOWFISH
 #define ccall(func, ...) ret = func(__VA_ARGS__);\
                          checkCryptNormal(ret, #func, __LINE__)
+
 
 static char GPG_SEC[] = "/.gnupg/secring.gpg";
 static char GPG_PUB[] = "/.gnupg/pubring.gpg";
