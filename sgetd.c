@@ -34,6 +34,7 @@
 #define sendtype(N, sock, obj) nn_send(sock, obj, sizeof(MessageType ## N), 0)
 
 #define ERR_MSG "Reset"
+#define MAX_BUFF_SIZE 10240
 
 struct Session {
     char username[DN_LENGTH+1];
@@ -44,21 +45,47 @@ struct Session {
 struct Session global_session;
 
 
+/*
+ * Destroy the global session
+ */
+void destroy_session() {
+    int i;
+    for (i = 0; i < DN_LENGTH+1; i++) {
+        global_session.username[i] = '\0';
+    }
+    for (i = 0; i < SID_LENGTH+1; i++) {
+        global_session.session_id[i] = '\0';
+    }
+    for (i = 0; i < SYM_KEY_LENGTH; i++) {
+        global_session.session_key[i] = '\0';
+    }
+}
+
 /* TYPE 0
  * A user is requesting to start a session
  */
 int handle0(int sock, char *buffer, unsigned int buffer_size)
 {
+    printf("Handling 0\n");
     int decrypted_size = 0, errors = 0;
-
+    /***********************************************************/
+    //buffer[2] += 114;
+    /***********************************************************/
     MessageType0 *msg = (MessageType0*)pgp_decrypt(buffer, buffer_size,
                                                    sizeof(MessageType0),
                                                    &decrypted_size,
                                                    &errors);
-
-    if (!msg_ok(TYPE0, decrypted_size, msg, sock, 1)) {
-        printf("WELL THAT WAS EXPECTED\n");
+    //printf("C1000 : %d\n", errors);
+    if (errors < 0) {
+        //printf("C2000");
+        send_error(sock, "Decryption Error", 1);
+        //printf("C9000");
         return -1;
+    } else {
+        if (!msg_ok(TYPE0, decrypted_size, msg, sock, 1)) {
+            printf("WELL THAT WAS EXPECTED\n");
+            return -1;
+        }
     }
 
     printf("Requesting User: %s\n", msg->distinguishedName);
@@ -99,7 +126,7 @@ void establish_session(int sock, char const *username)
     memcpy(response.symmetricKey, session_key, SYM_KEY_LENGTH);
 
     memset(session_key, 0, SYM_KEY_LENGTH);
-    munlock(session_key, SYM_KEY_LENGTH);
+    //munlock(session_key, SYM_KEY_LENGTH);
     free(session_key);
 
     printf("Session ID: %s\n", response.sessionId);
@@ -117,6 +144,7 @@ void establish_session(int sock, char const *username)
  */
 int send_error(int sock, char *error_text, int phase)
 {
+    //printf("C3000");
     printf("Sending Type 2 Message (phase: %d): %s\n", phase, error_text);
 
     MessageType2 err_msg = initmsgtype(2);
@@ -145,33 +173,54 @@ int send_error(int sock, char *error_text, int phase)
 /*
  * A user is requesting a file
  */
-void handle3(int sock, char *buffer, unsigned int buffer_size)
+int handle3(int sock, char *buffer, unsigned int buffer_size)
 {
     printf("Handling 3\n");
     int bytes_decrypted = 0, errors = 0;
+    /************************************************/
+    //buffer[5] = 111;
+    /************************************************/
     MessageType3 *msg = (MessageType3*)sym_decrypt(buffer, buffer_size,
-                                                   sizeof(MessageType3),
+                                                   //sizeof(MessageType3),
+                                                   MAX_BUFF_SIZE,
                                                    global_session.session_key,
                                                    &bytes_decrypted,
                                                    &errors);
-
+    if (errors < 0) {
+        MessageType2 *msg2 = (MessageType2*)pgp_decrypt(buffer, buffer_size, 
+                                                       MAX_BUFF_SIZE,
+                                                       &bytes_decrypted, &errors);
+        if (errors < 0) {
+            send_error(sock, "Decryption Error", 2);
+            return -1;
+        } else {
+            if (!msg_ok(TYPE2, bytes_decrypted, msg2, sock, 1)) {
+                return -1;
+            }
+        }                               
+    } else {
+        if (!msg_ok(TYPE3, bytes_decrypted, msg, sock, 2)) {
+            return -1;
+        }   
+    }
     // NOTE TO ANDREW: Does this stuff just happen in msg_ok though?
     if (msg->sidLength != SID_LENGTH || msg->sessionId[SID_LENGTH] != 0) {
         send_error(sock, "Invalid session id.", 2);
-        return;
+        return -1;
     } else {
         printf("Session id: %s\n", msg->sessionId);
         printf("Path: %s\n", msg->pathName);
 
-        //TODO: Assert that the session ID matches and userID matches
         char *username = global_session.username;
         printf("User: %s\n", username);
         if (check_acl_access(msg->pathName, username) == 1) {
             file_transfer(sock, msg->sessionId, msg->pathName);
         } else {
             send_error(sock, "Access to file denied.", 2);
+            return -1;
         }
     }
+    return 0;
 }
 
 
@@ -195,7 +244,6 @@ void end_session(int sock, char const *session_id)
 
 /*
  * User is sending ACK of a type 4 (file send) message.
- * TODO: Validate the session id
  */
 int expect_ack(int sock, char const *session_id)
 {
@@ -211,6 +259,9 @@ int expect_ack(int sock, char const *session_id)
     //    return 0;
     //}
 
+    /*********************************************************/
+    //buffer[15] = 123;
+    /********************************************************/
     int decrypted_size = 0, errors = 0;
     char *decrypted_data = sym_decrypt(buffer, bytes_read,
                                        MAX_BUFFER_SIZE,
@@ -218,8 +269,13 @@ int expect_ack(int sock, char const *session_id)
                                        &decrypted_size,
                                        &errors);
 
-    if (!msg_ok(TYPE6, decrypted_size, decrypted_data, sock, 2))
-        return 0;
+    if (errors < 0) {
+        send_error(sock, "Decryption Error", 2);
+        return -1;
+    } else {
+        if (!msg_ok(TYPE6, decrypted_size, decrypted_data, sock, 2))
+            return -1;
+    }
 
     printf("Ack sid: %s\n", ((MessageType6*)decrypted_data)->sessionId);
 
@@ -262,7 +318,7 @@ void file_transfer(int sock, char *session_id, char *path)
 
         free(enc_buffer);
 
-        if (expect_ack(sock, session_id) == 0) {
+        if (expect_ack(sock, session_id) < 0) {
             return;
         }
     }
@@ -298,10 +354,10 @@ int msg_ok(char expect,int bytes_read,void * buffer, int sock, int phase)
         printf("Message size: %d\n", msg_header->messageLength);
     }
 /********************************************************/
-    printf("sizeof(buffer): %d\n", strlen((char*)buffer) );
-    printf("bytes_read: %d\n", bytes_read);
-    printf("msg_header->messageLength: %d\n", msg_header->messageLength);
-    printf("sizeof(MessageType0): %d\n", sizeof(MessageType0));
+    //printf("sizeof(buffer): %d\n", strlen((char*)buffer) );
+    //printf("bytes_read: %d\n", bytes_read);
+    //printf("msg_header->messageLength: %d\n", msg_header->messageLength);
+    //printf("sizeof(MessageType0): %d\n", sizeof(MessageType0));
 /*******************************************************/
         //check actual message size against reported
     if (bytes_read != msg_header->messageLength) {
@@ -435,6 +491,7 @@ void server_loop(int sock)
                 ret = handle0(sock, (char*)buffer, bytes_read);
                 if (ret < 0) {
                     expect = TYPE0;
+                    destroy_session();
                 } else {
                     expect = TYPE3;
                 }
@@ -442,7 +499,7 @@ void server_loop(int sock)
             case TYPE3:
                 handle3(sock, (char*)buffer, bytes_read);
                 expect = TYPE0;
-                //TODO: END THE SESSION
+                destroy_session();
                 break;
             default:
                 break;

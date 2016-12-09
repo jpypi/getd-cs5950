@@ -42,8 +42,8 @@ char * gen_symmetric_key(unsigned int length) {
     if (key == NULL)
         err_sys("Could not allocate space for symmetric key on heap");
 
-    if (mlock(key, length) < 0)
-        err_sys("Could not lock private session encryption key in memory");
+    //if (mlock(key, length) < 0)
+    //    err_sys("Could not lock private session encryption key in memory");
 
     int urand_fd = open("/dev/urandom", O_RDONLY);
     if (urand_fd == -1) err_sys("Could not open /dev/urandom for entropy");
@@ -106,8 +106,9 @@ int pgp_encrypt(char *buffer, unsigned int size, char **enc_data) {
     CRYPT_KEYSET keyset;
     CRYPT_ENVELOPE data_envelope;
 
-    // This is fine for testing, but needs to be fixed for prod
     //char *recipient = "vagrant";
+
+    // Find userid of server user to use for recipient public key
     char *recipient = calloc(sizeof(char), 129);
     ret = getlogin_r(recipient, 128);
     if (ret < 0) {
@@ -147,6 +148,10 @@ int pgp_encrypt(char *buffer, unsigned int size, char **enc_data) {
     ccall(cryptDestroyEnvelope, data_envelope);
     ccall(cryptKeysetClose, keyset);
 
+    free(recipient);
+
+    //printf("C41");
+
     return bytes_copied;
 }
 
@@ -175,25 +180,27 @@ char * pgp_decrypt(char *enc_buffer, int data_size, int expect_size,
 
     // Put data in the envelope
     ret = cryptPushData(data_envelope, enc_buffer, data_size, &bytes_copied);
-    if (ret != -50)
-        err_quit("Error trying to push data into the envelope in pgp_decrypt");
+    if (ret != -50) {
+        printf("Error trying to push data into the envelope in pgp_decrypt\n");
+        *errors = -1;
+        return NULL;
+        //err_quit("Error trying to push data into the envelope in pgp_decrypt");
+    }
 
     int req_attrib = 0;
     ret = cryptGetAttribute(data_envelope, CRYPT_ATTRIBUTE_CURRENT, &req_attrib);
     if (req_attrib != CRYPT_ENVINFO_PRIVATEKEY) {
-        *errors = ret;
+        *errors = -1;
         return NULL;
     }
 
-    // TODO: Put the actual passphrase here for testing
-    // TODO: DON'T LEAVE THIS HERE FOR PRODUCTION
-    // TODO: Use a prompt for the password
+    // Get private key password
     char pass[100];
     int pLen = getPassword(pass, 100);
-    printf("%s : %d\n", pass, pLen);
 
     ret = cryptSetAttributeString(data_envelope, CRYPT_ENVINFO_PASSWORD,
                                   pass, pLen);
+    // We don't need the password anymore, so wipe it out.
     int i;
     for (i = 0; i < pLen; i++) {
         pass[i] = '\0';
@@ -287,8 +294,12 @@ char * sym_decrypt(char *enc_buffer, int data_size, int expect_size, char *key,
     ccall(cryptCreateEnvelope, &data_envelope, CRYPT_UNUSED, CRYPT_FORMAT_AUTO);
 
     ret = cryptPushData(data_envelope, enc_buffer, data_size, &bytes_copied);
-    if (ret != -50)
-        err_quit("Error trying to push data into the envelope in sym_decrypt");
+    if (ret != -50) {
+        printf("Error trying to push data into the envelope in sym_decrypt\n");
+        *errors = -1;
+        return NULL;
+        //err_quit("Error trying to push data into the envelope in sym_decrypt");
+    }
 
     ccall(cryptCreateContext, &sym_context, CRYPT_UNUSED, SYMMETRIC_ALG);
 
